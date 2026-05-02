@@ -672,6 +672,22 @@ var JsonSearchEngine = (function (exports) {
                       break;
                   case exports.TokenKind.Eof:
                       break;
+                  case exports.TokenKind.Ident:
+                  case exports.TokenKind.String:
+                      // Allow trailing tokens for bare terms (full-text search)
+                      // Multiple trailing identifiers should be combined with AND
+                      if (expr && (expr.type === "Term" || expr.type === "FuzzyTerm")) {
+                          // Collect all trailing identifiers into an AND expression
+                          const terms = [expr];
+                          while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String) {
+                              const tok = this.next();
+                              terms.push({ type: "Term", value: tok.value });
+                          }
+                          // Combine into AND expression
+                          expr = { type: "And", parts: terms };
+                          continue;
+                      }
+                      throw new QueryParseError("Unexpected trailing input", this.peek().pos);
                   default:
                       // Allow trailing tokens for bare terms (full-text search)
                       // Don't throw - just break and return what we parsed
