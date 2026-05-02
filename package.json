@@ -1,0 +1,59 @@
+{
+  "name": "json-search-engine",
+  "version": "1.0.0",
+  "description": "Pure JavaScript/TypeScript JSON search engine with SQL-like query language",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "ts3.8": "dist/types/index.d.ts"
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/cjs/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npm run build:esm && npm run build:cjs && npm run build:types",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:types": "tsc -p tsconfig.json --emitDeclarationOnly",
+    "build:iife": "rollup -c rollup.config.js",
+    "build:min": "terser dist/iife/json-search-engine.js -o dist/iife/json-search-engine.min.js --compress --mangle",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "keywords": [
+    "search",
+    "json",
+    "query",
+    "filter",
+    "search-engine",
+    "sql-like"
+  ],
+  "author": "Kuldeep Singh",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "eslint": "^8.55.0",
+    "prettier": "^3.1.0",
+    "rollup": "^4.60.2",
+    "rollup-plugin-typescript2": "^0.37.0",
+    "terser": "^5.46.2",
+    "typescript": "^5.9.3",
+    "vitest": "^1.1.0"
+  }
+}
