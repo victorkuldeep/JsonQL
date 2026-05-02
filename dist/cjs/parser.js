@@ -172,6 +172,15 @@ class Parser {
                 case types_js_1.TokenKind.Eof:
                     break;
                 default:
+                    // Allow trailing tokens for bare terms (full-text search)
+                    // Don't throw - just break and return what we parsed
+                    if (expr && (expr.type === "Term" || expr.type === "FuzzyTerm" || expr.type === "All")) {
+                        // Reset position to end
+                        while (this.peek().kind !== types_js_1.TokenKind.Eof) {
+                            this.next();
+                        }
+                        break;
+                    }
                     throw new types_js_1.QueryParseError("Unexpected trailing input", this.peek().pos);
             }
         }
