@@ -168,17 +168,47 @@ export class Parser {
                     break;
                 case TokenKind.Ident:
                 case TokenKind.String:
-                    // Allow trailing tokens for bare terms (full-text search)
-                    // Multiple trailing identifiers should be combined with AND
-                    if (expr && (expr.type === "Term" || expr.type === "FuzzyTerm")) {
-                        // Collect all trailing identifiers into an AND expression
-                        const terms = [expr];
+                    // Handle bare full-text terms with AND/OR operators
+                    // Need to convert: term AND term OR term → proper expression
+                    if (expr && (expr.type === "Term" || expr.type === "FuzzyTerm" || expr.type === "And")) {
+                        // Collect trailing identifiers first
+                        const terms = [];
+                        if (expr.type === "And") {
+                            terms.push(...expr.parts);
+                        }
+                        else if (expr.type === "Term" || expr.type === "FuzzyTerm") {
+                            terms.push(expr);
+                        }
                         while (this.peek().kind === TokenKind.Ident || this.peek().kind === TokenKind.String) {
                             const tok = this.next();
                             terms.push({ type: "Term", value: tok.value });
                         }
-                        // Combine into AND expression
-                        expr = { type: "And", parts: terms };
+                        // Now we have multiple terms - check if next is AND/OR
+                        if (this.peek().kind === TokenKind.And || this.peek().kind === TokenKind.Or) {
+                            const op = this.next();
+                            // Get right side terms
+                            const rightTerms = [];
+                            while (this.peek().kind === TokenKind.Ident || this.peek().kind === TokenKind.String) {
+                                const tok = this.next();
+                                rightTerms.push({ type: "Term", value: tok.value });
+                            }
+                            if (rightTerms.length === 0) {
+                                throw new QueryParseError(`Expected term after AND/OR`, this.peek().pos);
+                            }
+                            // Build combined expression
+                            const leftExpr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
+                            const rightExpr = rightTerms.length === 1 ? rightTerms[0] : { type: "And", parts: rightTerms };
+                            if (op.kind === TokenKind.And) {
+                                expr = { type: "And", parts: [leftExpr, rightExpr] };
+                            }
+                            else {
+                                expr = { type: "Or", parts: [leftExpr, rightExpr] };
+                            }
+                        }
+                        else {
+                            // Just multiple terms without explicit operator - combine as AND
+                            expr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
+                        }
                         continue;
                     }
                     throw new QueryParseError("Unexpected trailing input", this.peek().pos);
@@ -306,6 +336,46 @@ export class Parser {
                 return { type: "FuzzyTerm", value: this.parseTerm() };
             case TokenKind.String:
                 return { type: "Term", value: tok.value };
+            case TokenKind.Number:
+                // Bare number with comparison? Try to parse as numeric predicate
+                // Look at next token - could be > >= < <= !
+                const next = this.tokens[this.pos + 1];
+                if (next && (next.kind === TokenKind.Gt || next.kind === TokenKind.Gte ||
+                    next.kind === TokenKind.Lt || next.kind === TokenKind.Lte ||
+                    next.kind === TokenKind.Neq)) {
+                    // This is a numeric comparison query - apply to all fields
+                    return { type: "Term", value: String(tok.value) };
+                }
+                return { type: "Term", value: String(tok.value) };
+            case TokenKind.Gt:
+            case TokenKind.Gte:
+            case TokenKind.Lt:
+            case TokenKind.Lte:
+                // Bare comparison operator at start -> numeric comparison across all fields
+                // Create a special expression that checks ALL numeric fields
+                const optok = this.next();
+                const numVal = this.peek();
+                if (numVal.kind === TokenKind.Number) {
+                    const num = numVal.value;
+                    this.next();
+                    // Return a special term that evaluator will treat as numeric comparison
+                    // Format: >N for >, <N for <, etc.
+                    const opChar = optok.kind === TokenKind.Gt ? ">" :
+                        optok.kind === TokenKind.Gte ? ">=" :
+                            optok.kind === TokenKind.Lt ? "<" : "<=";
+                    return { type: "NumericTerm", value: String(num), op: opChar };
+                }
+                throw new QueryParseError("Expected number after comparison operator", this.peek().pos);
+            case TokenKind.Neq:
+                // Could be prefix NOT or !=
+                this.next();
+                const notVal = this.peek();
+                if (notVal.kind === TokenKind.Number) {
+                    const term = { type: "Term", value: String(notVal.value) };
+                    this.next();
+                    return term;
+                }
+                throw new QueryParseError("Expected value after !", this.peek().pos);
             default:
                 throw new QueryParseError("Expected term, predicate, or '('", tok.pos);
         }

@@ -163,13 +163,14 @@ export interface Token {
  * - All node: match everything
  */
 export type Expr =
-  | { type: "Or"; parts: Expr[] }       // OR(a, b, c) - any match
-  | { type: "And"; parts: Expr[] }    // AND(a, b, c) - all match
-  | { type: "Not"; inner: Expr }      // NOT(a) - negation
-  | { type: "Term"; value: string } // Full-text search term
-  | { type: "FuzzyTerm"; value: string } // Fuzzy search term
-  | { type: "Predicate"; pred: Predicate } // Field comparison
-  | { type: "All" };             // Match all records
+  | { type: "Or"; parts: Expr[] }
+  | { type: "And"; parts: Expr[] }
+  | { type: "Not"; inner: Expr }
+  | { type: "Term"; value: string }
+  | { type: "FuzzyTerm"; value: string }
+  | { type: "NumericTerm"; value: string; op: string }
+  | { type: "Predicate"; pred: Predicate }
+  | { type: "All" };
 
 /**
  * Comparison operators for predicates.

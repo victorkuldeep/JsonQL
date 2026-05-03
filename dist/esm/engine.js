@@ -43,6 +43,9 @@ export function evalExpr(expr, item, options, idx) {
         case "FuzzyTerm":
             // Fuzzy search term
             return fuzzyContainsText(item, expr.value, options);
+        case "NumericTerm":
+            // Numeric comparison across all fields
+            return numericContainsText(item, expr.value, expr.op);
         case "Predicate":
             // Field comparison
             return evalPredicate(expr.pred, item, options, idx);
@@ -496,6 +499,33 @@ function fuzzyContainsText(value, term, options) {
     if (value && typeof value === "object") {
         for (const v of Object.values(value)) {
             if (fuzzyContainsText(v, term, options))
+                return true;
+        }
+    }
+    return false;
+}
+/**
+ * Numeric comparison - check if ANY number field matches.
+ * Handles >, >=, <, <= comparisons.
+ */
+function numericContainsText(value, numStr, op) {
+    const targetNum = parseFloat(numStr);
+    if (isNaN(targetNum))
+        return false;
+    if (typeof value === "number") {
+        switch (op) {
+            case ">": return value > targetNum;
+            case ">=": return value >= targetNum;
+            case "<": return value < targetNum;
+            case "<=": return value <= targetNum;
+        }
+    }
+    if (Array.isArray(value)) {
+        return value.some(v => numericContainsText(v, numStr, op));
+    }
+    if (value && typeof value === "object") {
+        for (const v of Object.values(value)) {
+            if (numericContainsText(v, numStr, op))
                 return true;
         }
     }

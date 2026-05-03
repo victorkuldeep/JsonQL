@@ -4,6 +4,11 @@ A pure JavaScript/TypeScript search engine for JSON arrays with SQL-like query l
 
 ## Features
 
+- **Smart Search Mode**: Auto-detects full-text vs SQL-like queries
+- **Bare text search**: Just type `enterprise` or `350`
+- **Multi-word**: `enterprise grade` = AND search
+- **AND/OR operators**: `enterprise AND cloud` 
+- **Numeric search**: `> 350` searches all numeric fields
 - **Full-text boolean search**: AND, OR, NOT operators
 - **Query operators**: `=`, `!=`, `>`, `>=`, `<`, `<=`
 - **Pattern matching**: LIKE, CONTAINS, STARTS WITH, ENDS WITH
@@ -59,6 +64,55 @@ const results = searchJson(data, 'country = "USA"');
   const results = JsonSearchEngine.searchJson(data, 'country = "USA"');
 </script>
 ```
+
+## Smart Search Mode
+
+The engine automatically detects query type:
+
+### Bare Text (Full-Text Search)
+
+```javascript
+// Single word - searches all fields
+searchJson(data, 'enterprise')      // finds "enterprise" anywhere
+
+// Multiple words - treated as AND
+searchJson(data, 'enterprise grade')  // finds records with BOTH terms
+
+// Numbers - search numeric fields
+searchJson(data, '350')              // finds price:350 anywhere
+```
+
+### With Operators (SQL-Like)
+
+```javascript
+// Field comparison
+searchJson(data, 'country = "USA"')
+searchJson(data, 'price > 500')
+
+// Full-text with AND/OR
+searchJson(data, 'enterprise AND cloud')
+searchJson(data, 'offering OR service')
+```
+
+### Numeric Comparisons
+
+```javascript
+// Search numeric fields with comparison operators
+searchJson(data, '> 350')      // any number field > 350
+searchJson(data, '< 1000')    // any number field < 1000
+searchJson(data, '>= 500')    // any number field >= 500
+```
+
+### Query Detection Logic
+
+| Query | Mode | Example |
+|-------|------|---------|
+| `enterprise` | Full-text | Search all fields |
+| `enterprise cloud` | Full-text AND | Both words must match |
+| `enterprise AND cloud` | Dumb Search | Explicit AND |
+| `name = "John"` | SQL-Like | Field comparison |
+| `> 350` | Numeric | Compare all numbers |
+| `350` | Full-text | Find "350" anywhere |
 
 ## Query Language
 

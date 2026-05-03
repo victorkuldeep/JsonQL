@@ -2,6 +2,59 @@
 
 A pure JavaScript/TypeScript search engine for JSON arrays with SQL-like query language.
 
+## Smart Search Mode
+
+The engine implements intelligent query detection that automatically distinguishes between full-text search and SQL-like field queries without requiring explicit prefixes.
+
+### Query Detection Logic
+
+```
+User Query: "enterprise cloud"
+     │
+     ▼
+┌─────────────┐
+│   Lexer     │ Tokenize: Ident, Ident, EOF
+└─────────────┘
+     │
+     ▼
+┌─────────────┐
+│   Parser    │
+│             │
+│ If (Ident followed by Ident/EOF)  → FULL-TEXT mode
+│    └─→ Combine as AND expression
+│
+│ If (Ident followed by Operator)   → SQL-LIKE mode  
+│    └─→ Parse as field predicate
+│
+│ If (starts with Operator)        → NUMERIC mode
+│    └─→ Create NumericTerm
+└─────────────┘
+```
+
+### Query Type Examples
+
+| Input | Tokens | Parser Mode | Behavior |
+|-------|--------|-------------|----------|
+| `enterprise` | Ident, EOF | Full-text | Search all string fields |
+| `enterprise cloud` | Ident, Ident, EOF | Full-text | AND both terms |
+| `enterprise AND cloud` | Ident, AND, Ident | Dumb Search | Explicit AND |
+| `name = "USA"` | Ident, Eq, String | SQL-like | Field comparison |
+| `> 350` | Gt, Number | Numeric | Compare all number fields |
+| `350` | Number, EOF | Full-text | Find number anywhere |
+
+### Expression Types (AST)
+
+```typescript
+type Expr =
+  | { type: "Term"; value: string }        // Full-text search
+  | { type: "FuzzyTerm"; value: string } // Fuzzy matching
+  | { type: "NumericTerm"; value: string; op: string } // Numeric comparison
+  | { type: "Predicate"; pred: Predicate } // Field comparison
+  | { type: "And"; parts: Expr[] }     // Boolean AND
+  | { type: "Or"; parts: Expr[] }    // Boolean OR
+  | { type: "All" };                // Match all
+```
+
 ## Overview
 
 ```
@@ -13,32 +66,35 @@ A pure JavaScript/TypeScript search engine for JSON arrays with SQL-like query l
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    SearchEngine                           │
-│  - Caches parsed queries                                   │
-│  - Manages field indexes                                   │
-│  - Caches search results                                   │
-│  - Tracks performance metrics                              │
+│  - Query parse cache (512 entries)                        │
+│  - Result cache (128 entries, adaptive threshold)          │
+│  - Field indexes (inverted)                               │
+│  - Metrics tracking                                       │
 └─────────────────────────────────────────────────────────────┘
                               │
          ┌────────────────────┼────────────────────┐
          ▼                    ▼                    ▼
 ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   Parser         │  │   Indexes       │  │   Cache         │
-│   (541 lines)    │  │   (211 lines)   │  │   (226 lines)   │
+│   Parser        │  │   Indexes       │  │   Cache         │
+│   (750+ lines) │  │   (280+ lines) │  │   (300+ lines)  │
 │                 │  │                 │  │                 │
-│ Tokenizer       │  │ FieldIndex      │  │ ResultCache     │
-│ ─────────────  │  │ InvertedIndex  │  │ QueryCache     │
-│ lexer.ts 218   │  │ IndexSet      │  │ EngineMetrics │
+│  Query Parser  │  │ FieldIndex     │  │ ResultCache    │
+│  - Full-text   │  │ InvertedIndex │  │ QueryCache     │
+│  - SQL-like    │  │ - IndexSet    │  │ EngineMetrics │
+│  - Smart Mode │  │ - Smart lookup│  │ - Adaptive     │
 └─────────────────┘  └─────────────────┘  └─────────────────┘
          │                    │                    │
          └────────────────────┼────────────────────┘
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    Evaluator (Engine)                      │
-│   (485 lines)                                            │
-│                                                        │
-│  - Expression evaluation                                │
-│  - Predicate evaluation                               │
-│  - Sort comparison                                  │
+│                    Evaluator (Engine)                  │
+│   (670+ lines)                                        │
+│                                                    │
+│  - Expression eval (Term, Fuzzy, Numeric, Predicate) │
+│  - Full-text matching                              │
+│  - Numeric comparison > >= < <=                   │
+│  - Predicate eval (=, !=, IN, LIKE, CONTAINS)      │
+│  - Sort comparison                                │
 │  - Path resolution (dotted notation)              │
 └─────────────────────────────────────────────────────────────┘
 ```
