@@ -23,6 +23,7 @@ __exportStar(require("./utils.js"), exports);
 __exportStar(require("./indexes.js"), exports);
 __exportStar(require("./cache.js"), exports);
 __exportStar(require("./aggregates.js"), exports);
+__exportStar(require("./compile.js"), exports);
 var engine_class_js_1 = require("./engine-class.js");
 Object.defineProperty(exports, "SearchEngine", { enumerable: true, get: function () { return engine_class_js_1.SearchEngine; } });
 Object.defineProperty(exports, "initEngine", { enumerable: true, get: function () { return engine_class_js_1.initEngine; } });

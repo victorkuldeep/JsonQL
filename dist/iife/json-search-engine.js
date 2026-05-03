@@ -711,26 +711,52 @@ var JsonSearchEngine = (function (exports) {
                   case exports.TokenKind.Number:
                       {
                           const terms = [];
-                          // First handle current token - detect wildcard patterns
-                          let tokValue = String(this.peek().value);
-                          const wildcardType = detectWildcard(tokValue);
-                          if (wildcardType) {
-                              terms.push(wildcardType);
-                          }
-                          else {
-                              terms.push({ type: "Term", value: tokValue });
-                          }
-                          this.next();
-                          // Collect more trailing terms
-                          while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String || this.peek().kind === exports.TokenKind.Number) {
-                              const termTok = this.next();
-                              let value = String(termTok.value);
-                              const wt = detectWildcard(value);
-                              if (wt) {
-                                  terms.push(wt);
+                          // Handle current token
+                          let tok = this.peek();
+                          let tokValue = String(tok.value);
+                          // Detect Number followed by Ident (e.g., "10 Gbps" -> "10 Gbps")
+                          if (tok.kind === exports.TokenKind.Number) {
+                              const next = this.tokens[this.pos + 1];
+                              if (next && next.kind === exports.TokenKind.Ident && !isPredicateOp(next.kind)) {
+                                  // Combine Number + Ident into one term
+                                  tokValue = tokValue + " " + next.value;
+                                  this.next(); // consume Number
+                                  this.next(); // consume Ident
+                                  terms.push({ type: "Term", value: tokValue });
                               }
                               else {
-                                  terms.push({ type: "Term", value });
+                                  const wildcardType = detectWildcard(tokValue);
+                                  if (wildcardType) {
+                                      terms.push(wildcardType);
+                                  }
+                                  else {
+                                      terms.push({ type: "Term", value: tokValue });
+                                  }
+                                  this.next();
+                              }
+                          }
+                          else {
+                              const wildcardType = detectWildcard(tokValue);
+                              if (wildcardType) {
+                                  terms.push(wildcardType);
+                              }
+                              else {
+                                  terms.push({ type: "Term", value: tokValue });
+                              }
+                              this.next();
+                          }
+                          // Collect more trailing terms only if no combined term was created
+                          if (!tokValue.includes(" ")) {
+                              while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String || this.peek().kind === exports.TokenKind.Number) {
+                                  const termTok = this.next();
+                                  let value = String(termTok.value);
+                                  const wt = detectWildcard(value);
+                                  if (wt) {
+                                      terms.push(wt);
+                                  }
+                                  else {
+                                      terms.push({ type: "Term", value });
+                                  }
                               }
                           }
                           // Check for AND/OR operators
@@ -2967,6 +2993,297 @@ var JsonSearchEngine = (function (exports) {
   }
 
   /**
+   * JSON Search Engine - Compiler
+   *
+   * Provides compile() API for precompiling queries for reuse,
+   * optimizer, execution planner, and plugin registries.
+   *
+   * @module compile
+   */
+  // ============================================================================
+  // Global Registries
+  // ============================================================================
+  const operators = new Map();
+  const functions = new Map();
+  // ============================================================================
+  // Optimizer Rules
+  // ============================================================================
+  const OPTIMIZER_RULES = [
+      {
+          name: "constant-folding",
+          optimize: (ast) => foldConstants(ast)
+      },
+      {
+          name: "simplify",
+          optimize: (ast) => simplifyPredicates(ast)
+      }
+  ];
+  /**
+   * Fold constant expressions.
+   */
+  function foldConstants(query) {
+      const expr = query.expr;
+      if (!expr)
+          return query;
+      return {
+          ...query,
+          expr: foldExpr(expr)
+      };
+  }
+  function foldExpr(expr) {
+      if (expr.type === "And") {
+          const andParts = expr.parts.map(foldExpr);
+          const filtered = andParts.filter(p => p.type !== "All");
+          if (filtered.length === 0)
+              return { type: "All" };
+          if (filtered.length === 1)
+              return filtered[0];
+          return { type: "And", parts: filtered };
+      }
+      if (expr.type === "Or") {
+          const orParts = expr.parts.map(foldExpr);
+          const filtered = orParts.filter(p => p.type !== "All");
+          if (filtered.length === 0)
+              return { type: "All" };
+          if (filtered.length === 1)
+              return filtered[0];
+          return { type: "Or", parts: filtered };
+      }
+      return expr;
+  }
+  /**
+   * Simplify redundant predicates.
+   */
+  function simplifyPredicates(query) {
+      const expr = query.expr;
+      if (!expr)
+          return query;
+      return {
+          ...query,
+          expr: simplifyExpr(expr)
+      };
+  }
+  function simplifyExpr(expr) {
+      if (expr.type === "And") {
+          const parts = expr.parts.map(simplifyExpr);
+          const seen = new Set();
+          const unique = [];
+          for (const p of parts) {
+              const key = JSON.stringify(p);
+              if (!seen.has(key)) {
+                  seen.add(key);
+                  unique.push(p);
+              }
+          }
+          if (unique.length === 0)
+              return { type: "All" };
+          if (unique.length === 1)
+              return unique[0];
+          return { type: "And", parts: unique };
+      }
+      if (expr.type === "Or") {
+          const parts = expr.parts.map(simplifyExpr);
+          const seen = new Set();
+          const unique = [];
+          for (const p of parts) {
+              const key = JSON.stringify(p);
+              if (!seen.has(key)) {
+                  seen.add(key);
+                  unique.push(p);
+              }
+          }
+          if (unique.length === 0)
+              return { type: "All" };
+          if (unique.length === 1)
+              return unique[0];
+          return { type: "Or", parts: unique };
+      }
+      return expr;
+  }
+  // ============================================================================
+  // Execution Planner
+  // ============================================================================
+  /**
+   * Generate execution plan from AST.
+   */
+  function plan(ast, options) {
+      const plan = {};
+      if (ast.expr && ast.expr.type !== "All") {
+          plan.filter = (item, idx) => {
+              const evalOpts = {
+                  caseSensitive: options.caseSensitive ?? false,
+                  strict: options.strict ?? false
+              };
+              return evalExpr(ast.expr, item, evalOpts, idx);
+          };
+      }
+      if (ast.orderBy) {
+          const orderBys = Array.isArray(ast.orderBy) ? ast.orderBy : [ast.orderBy];
+          plan.sort = (a, b) => {
+              const cmp = compareForSort(a, b, orderBys, { caseSensitive: options.caseSensitive ?? false, strict: options.strict ?? false });
+              return cmp;
+          };
+      }
+      plan.projection = ast.projection;
+      plan.limit = ast.limit;
+      plan.offset = ast.offset;
+      return plan;
+  }
+  // ============================================================================
+  // Compile API
+  // ============================================================================
+  /**
+   * Compile a query string for reuse.
+   *
+   * @example
+   * ```typescript
+   * const compiled = compile('price > 100 ORDER BY name');
+   * const result = compiled.exec(data);
+   * ```
+   */
+  function compile(query, options) {
+      const opts = {
+          caseSensitive: false,
+          strict: false,
+          score: false,
+          ...options
+      };
+      const ast = parseQueryCached(query);
+      const evalOpts = {
+          caseSensitive: opts.caseSensitive ?? false,
+          strict: opts.strict ?? false
+      };
+      const execPlan = plan(ast, opts);
+      return {
+          query,
+          ast,
+          plan: execPlan,
+          options: opts,
+          exec(data) {
+              let result = data;
+              if (this.plan.filter) {
+                  const indices = [];
+                  for (let i = 0; i < result.length; i++) {
+                      if (this.plan.filter(result[i], i)) {
+                          indices.push(i);
+                      }
+                  }
+                  result = indices.map(i => data[i]);
+              }
+              if (this.plan.sort) {
+                  result = [...result].sort(this.plan.sort);
+              }
+              const offset = this.plan.offset ?? 0;
+              if (offset > 0) {
+                  result = result.slice(offset);
+              }
+              const limit = this.plan.limit;
+              if (limit != null) {
+                  result = result.slice(0, limit);
+              }
+              return result;
+          },
+          execPaged(data, limit, offset) {
+              let result = data;
+              let total = 0;
+              if (this.plan.filter) {
+                  const indices = [];
+                  for (let i = 0; i < result.length; i++) {
+                      if (this.plan.filter(result[i], i)) {
+                          indices.push(i);
+                      }
+                  }
+                  total = indices.length;
+                  result = indices.map(i => data[i]);
+              }
+              else {
+                  total = result.length;
+              }
+              if (this.plan.sort) {
+                  result = [...result].sort(this.plan.sort);
+              }
+              const off = offset ?? this.plan.offset ?? 0;
+              if (off > 0) {
+                  result = result.slice(off);
+              }
+              const lim = limit ?? this.plan.limit ?? result.length;
+              result = result.slice(0, lim);
+              return { totalMatches: total, rows: result };
+          }
+      };
+  }
+  /**
+   * Optimize a query AST.
+   */
+  function optimize(query) {
+      let optimized = query;
+      const rulesApplied = [];
+      for (const rule of OPTIMIZER_RULES) {
+          const before = JSON.stringify(optimized);
+          optimized = rule.optimize(optimized);
+          const after = JSON.stringify(optimized);
+          if (before !== after) {
+              rulesApplied.push(rule.name);
+          }
+      }
+      return {
+          original: query,
+          optimized,
+          rulesApplied
+      };
+  }
+  // ============================================================================
+  // Plugin System
+  // ============================================================================
+  const operatorRegistry = {
+      register(name, fn) {
+          operators.set(name.toUpperCase(), fn);
+      },
+      get(name) {
+          return operators.get(name.toUpperCase());
+      },
+      list() {
+          return Array.from(operators.keys());
+      },
+      clear() {
+          operators.clear();
+      }
+  };
+  const functionRegistry = {
+      register(name, fn) {
+          functions.set(name.toUpperCase(), fn);
+      },
+      get(name) {
+          return functions.get(name.toUpperCase());
+      },
+      list() {
+          return Array.from(functions.keys());
+      },
+      clear() {
+          functions.clear();
+      }
+  };
+  // Pre-register default operators
+  operatorRegistry.register("ILIKE", (a, b) => {
+      if (typeof a === "string" && typeof b === "string") {
+          return a.toLowerCase().includes(b.toLowerCase());
+      }
+      return false;
+  });
+  operatorRegistry.register("STARTSWITH", (a, b) => {
+      if (typeof a === "string" && typeof b === "string") {
+          return a.toLowerCase().startsWith(b.toLowerCase());
+      }
+      return false;
+  });
+  operatorRegistry.register("ENDSWITH", (a, b) => {
+      if (typeof a === "string" && typeof b === "string") {
+          return a.toLowerCase().endsWith(b.toLowerCase());
+      }
+      return false;
+  });
+
+  /**
    * JSON Search Engine - SearchEngine Class
    *
    * Main SearchEngine class that ties everything together.
@@ -3301,9 +3618,11 @@ var JsonSearchEngine = (function (exports) {
   exports.cloneJson = cloneJson;
   exports.collectIndexFilters = collectIndexFilters;
   exports.compareForSort = compareForSort;
+  exports.compile = compile;
   exports.countAll = countAll;
   exports.evalExpr = evalExpr;
   exports.evalPredicate = evalPredicate;
+  exports.functionRegistry = functionRegistry;
   exports.getPath = getPath;
   exports.initEngine = initEngine;
   exports.isArray = isArray;
@@ -3311,6 +3630,8 @@ var JsonSearchEngine = (function (exports) {
   exports.isValidFieldName = isValidFieldName;
   exports.normalizeString = normalizeString;
   exports.normalizeValue = normalizeValue;
+  exports.operatorRegistry = operatorRegistry;
+  exports.optimize = optimize;
   exports.parseQuery = parseQuery;
   exports.parseQueryCached = parseQueryCached;
   exports.searchJson = searchJson;

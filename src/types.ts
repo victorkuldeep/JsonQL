@@ -470,3 +470,146 @@ export interface IndexHit {
   /** Relevance score */
   score: number;
 }
+
+// ============================================================================
+// Compiler Types
+// ============================================================================
+
+/**
+ * Compiled query ready for execution.
+ * Returned by compile() function.
+ */
+export interface CompiledQuery {
+  /** Original query string */
+  query: string;
+  /** Parsed AST */
+  ast: Query;
+  /** Execution plan */
+  plan: ExecutionPlan;
+  /** Options used */
+  options: CompileOptions;
+  /** Execute against data */
+  exec(data: JsonValue[]): JsonValue[];
+  /** Execute with pagination */
+  execPaged(data: JsonValue[], limit?: number, offset?: number): PagedResult;
+}
+
+/**
+ * Execution plan with steps.
+ * Describes how to execute the query.
+ */
+export interface ExecutionPlan {
+  /** Filter step */
+  filter?: (item: JsonValue, idx: number) => boolean;
+  /** Sort comparator */
+  sort?: (a: JsonValue, b: JsonValue) => number;
+  /** Projection fields */
+  projection?: string[] | null;
+  /** Limit count */
+  limit?: number | null;
+  /** Offset count */
+  offset?: number | null;
+  /** Post-filter sort for scoring */
+  scoreSort?: boolean;
+}
+
+/**
+ * Options for compile().
+ */
+export interface CompileOptions {
+  /** Case sensitive string comparison */
+  caseSensitive?: boolean;
+  /** Strict type matching */
+  strict?: boolean;
+  /** Enable scoring */
+  score?: boolean;
+  /** Field indexes */
+  indexes?: string[];
+}
+
+// ============================================================================
+// Optimizer Types
+// ============================================================================
+
+/**
+ * Optimizer rule.
+ * Takes AST, returns optimized AST.
+ */
+export interface OptimizerRule {
+  name: string;
+  optimize(ast: Query): Query;
+}
+
+/**
+ * Optimization result.
+ */
+export interface OptimizationResult {
+  /** Original AST */
+  original: Query;
+  /** Optimized AST */
+  optimized: Query;
+  /** Rules applied */
+  rulesApplied: string[];
+}
+
+// ============================================================================
+// Plugin Types
+// ============================================================================
+
+/**
+ * Custom operator function.
+ * (value, compare, context) => boolean
+ */
+export type OperatorFn = (value: JsonValue, compare: JsonValue, context?: JsonValue) => boolean;
+
+/**
+ * Custom function.
+ * (...args) => JsonValue
+ */
+export type CustomFn = (...args: JsonValue[]) => JsonValue;
+
+/**
+ * Operator registry.
+ */
+export interface OperatorRegistry {
+  /** Register custom operator */
+  register(name: string, fn: OperatorFn): void;
+  /** Get operator */
+  get(name: string): OperatorFn | undefined;
+  /** List operators */
+  list(): string[];
+  /** Clear all */
+  clear(): void;
+}
+
+/**
+ * Function registry.
+ */
+export interface FunctionRegistry {
+  /** Register custom function */
+  register(name: string, fn: CustomFn): void;
+  /** Get function */
+  get(name: string): CustomFn | undefined;
+  /** List functions */
+  list(): string[];
+  /** Clear all */
+  clear(): void;
+}
+
+// ============================================================================
+// Registry Types
+// ============================================================================
+
+/**
+ * Index registry.
+ */
+export interface IndexRegistry {
+  /** Register index for field */
+  register(field: string, index: unknown): void;
+  /** Get index for field */
+  get(field: string): unknown | undefined;
+  /** List indexed fields */
+  list(): string[];
+  /** Clear all */
+  clear(): void;
+}

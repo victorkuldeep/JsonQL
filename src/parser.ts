@@ -199,25 +199,49 @@ case TokenKind.Ident:
               {
                 const terms: Expr[] = [];
                 
-                // First handle current token - detect wildcard patterns
-                let tokValue = String(this.peek().value);
-                const wildcardType = detectWildcard(tokValue);
-                if (wildcardType) {
-                  terms.push(wildcardType as Expr);
-                } else {
-                  terms.push({ type: "Term" as const, value: tokValue });
-                }
-                this.next();
+                // Handle current token
+                let tok = this.peek();
+                let tokValue = String(tok.value);
                 
-                // Collect more trailing terms
-                while (this.peek().kind === TokenKind.Ident || this.peek().kind === TokenKind.String || this.peek().kind === TokenKind.Number) {
-                  const termTok = this.next();
-                  let value = String(termTok.value);
-                  const wt = detectWildcard(value);
-                  if (wt) {
-                    terms.push(wt as Expr);
+                // Detect Number followed by Ident (e.g., "10 Gbps" -> "10 Gbps")
+                if (tok.kind === TokenKind.Number) {
+                  const next = this.tokens[this.pos + 1];
+                  if (next && next.kind === TokenKind.Ident && !isPredicateOp(next.kind)) {
+                    // Combine Number + Ident into one term
+                    tokValue = tokValue + " " + next.value;
+                    this.next(); // consume Number
+                    this.next(); // consume Ident
+                    terms.push({ type: "Term" as const, value: tokValue });
                   } else {
-                    terms.push({ type: "Term" as const, value });
+                    const wildcardType = detectWildcard(tokValue);
+                    if (wildcardType) {
+                      terms.push(wildcardType as Expr);
+                    } else {
+                      terms.push({ type: "Term" as const, value: tokValue });
+                    }
+                    this.next();
+                  }
+                } else {
+                  const wildcardType = detectWildcard(tokValue);
+                  if (wildcardType) {
+                    terms.push(wildcardType as Expr);
+                  } else {
+                    terms.push({ type: "Term" as const, value: tokValue });
+                  }
+                  this.next();
+                }
+                
+                // Collect more trailing terms only if no combined term was created
+                if (!tokValue.includes(" ")) {
+                  while (this.peek().kind === TokenKind.Ident || this.peek().kind === TokenKind.String || this.peek().kind === TokenKind.Number) {
+                    const termTok = this.next();
+                    let value = String(termTok.value);
+                    const wt = detectWildcard(value);
+                    if (wt) {
+                      terms.push(wt as Expr);
+                    } else {
+                      terms.push({ type: "Term" as const, value });
+                    }
                   }
                 }
                 
