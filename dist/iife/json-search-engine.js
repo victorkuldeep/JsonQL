@@ -301,11 +301,11 @@ var JsonSearchEngine = (function (exports) {
                       this.readString(c);
                       break;
                   default:
-                      // Number or identifier
+                      // Number or identifier (including * for wildcards like Prod*)
                       if (isDigit(c) || (c === "." && isDigit(this.input[this.pos + 1]))) {
                           this.readNumber();
                       }
-                      else if (isAlpha(c) || c === "_") {
+                      else if (isAlpha(c) || c === "_" || c === "*") {
                           this.readIdent();
                       }
                       else {
@@ -352,9 +352,22 @@ var JsonSearchEngine = (function (exports) {
       readNumber() {
           const start = this.pos;
           let s = "";
+          // Check if starts with 0 followed by more digits (like 000001 or 001)
+          let hasLeadingZeros = false;
           while (this.pos < this.input.length && (isDigit(this.input[this.pos]) || this.input[this.pos] === ".")) {
+              if (this.input[this.pos] === "0" && s === "") {
+                  hasLeadingZeros = true;
+              }
               s += this.input[this.pos];
               this.pos++;
+          }
+          // If has leading zeros like 000001, treat entire thing as identifier
+          // Product codes like "000001" should be treated as string
+          if (hasLeadingZeros && s.length > 1) {
+              // Read as identifier instead
+              this.pos = start;
+              this.readIdent();
+              return;
           }
           const num = parseFloat(s);
           if (isNaN(num)) {
@@ -421,7 +434,7 @@ var JsonSearchEngine = (function (exports) {
    * Used for field name validation.
    */
   function isAlphaNum(c) {
-      return isAlpha(c) || isDigit(c) || c === "_" || c === ".";
+      return isAlpha(c) || isDigit(c) || c === "_" || c === "." || c === "*";
   }
   // ============================================================================
   // Keyword Lookup
@@ -526,6 +539,27 @@ var JsonSearchEngine = (function (exports) {
    *
    * @module parser
    */
+  /**
+   * Detect wildcard pattern and return expression type.
+   * - *suffix → EndsWith
+   * - prefix* → StartsWith
+   * - *prefix* → Contains
+   * Returns null for plain term.
+   */
+  function detectWildcard(value) {
+      if (!value.includes("*") || value.length < 2)
+          return null;
+      if (value.startsWith("*") && value.endsWith("*")) {
+          return { type: "Contains", value: value.slice(1, -1) };
+      }
+      if (value.startsWith("*")) {
+          return { type: "EndsWith", value: value.slice(1) };
+      }
+      if (value.endsWith("*")) {
+          return { type: "StartsWith", value: value.slice(0, -1) };
+      }
+      return null;
+  }
   /** Maximum nesting depth for expressions to prevent stack overflow */
   const MAX_NESTING_DEPTH = 100;
   /**
@@ -674,34 +708,49 @@ var JsonSearchEngine = (function (exports) {
                       break;
                   case exports.TokenKind.Ident:
                   case exports.TokenKind.String:
-                      // Handle bare full-text terms with AND/OR operators
-                      // Need to convert: term AND term OR term → proper expression
-                      if (expr && (expr.type === "Term" || expr.type === "FuzzyTerm" || expr.type === "And")) {
-                          // Collect trailing identifiers first
+                  case exports.TokenKind.Number:
+                      {
                           const terms = [];
-                          if (expr.type === "And") {
-                              terms.push(...expr.parts);
+                          // First handle current token - detect wildcard patterns
+                          let tokValue = String(this.peek().value);
+                          const wildcardType = detectWildcard(tokValue);
+                          if (wildcardType) {
+                              terms.push(wildcardType);
                           }
-                          else if (expr.type === "Term" || expr.type === "FuzzyTerm") {
-                              terms.push(expr);
+                          else {
+                              terms.push({ type: "Term", value: tokValue });
                           }
-                          while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String) {
-                              const tok = this.next();
-                              terms.push({ type: "Term", value: tok.value });
+                          this.next();
+                          // Collect more trailing terms
+                          while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String || this.peek().kind === exports.TokenKind.Number) {
+                              const termTok = this.next();
+                              let value = String(termTok.value);
+                              const wt = detectWildcard(value);
+                              if (wt) {
+                                  terms.push(wt);
+                              }
+                              else {
+                                  terms.push({ type: "Term", value });
+                              }
                           }
-                          // Now we have multiple terms - check if next is AND/OR
+                          // Check for AND/OR operators
                           if (this.peek().kind === exports.TokenKind.And || this.peek().kind === exports.TokenKind.Or) {
                               const op = this.next();
-                              // Get right side terms
                               const rightTerms = [];
-                              while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String) {
-                                  const tok = this.next();
-                                  rightTerms.push({ type: "Term", value: tok.value });
+                              while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String || this.peek().kind === exports.TokenKind.Number) {
+                                  const rightTok = this.next();
+                                  let value = String(rightTok.value);
+                                  const wt = detectWildcard(value);
+                                  if (wt) {
+                                      rightTerms.push(wt);
+                                  }
+                                  else {
+                                      rightTerms.push({ type: "Term", value });
+                                  }
                               }
                               if (rightTerms.length === 0) {
                                   throw new QueryParseError(`Expected term after AND/OR`, this.peek().pos);
                               }
-                              // Build combined expression
                               const leftExpr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
                               const rightExpr = rightTerms.length === 1 ? rightTerms[0] : { type: "And", parts: rightTerms };
                               if (op.kind === exports.TokenKind.And) {
@@ -712,7 +761,6 @@ var JsonSearchEngine = (function (exports) {
                               }
                           }
                           else {
-                              // Just multiple terms without explicit operator - combine as AND
                               expr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
                           }
                           continue;
@@ -721,7 +769,7 @@ var JsonSearchEngine = (function (exports) {
                   default:
                       // Allow trailing tokens for bare terms (full-text search)
                       // Don't throw - just break and return what we parsed
-                      if (expr && (expr.type === "Term" || expr.type === "FuzzyTerm" || expr.type === "All")) {
+                      if (expr && (expr.type === "Term" || expr.type === "StartsWith" || expr.type === "EndsWith" || expr.type === "Contains" || expr.type === "FuzzyTerm" || expr.type === "All")) {
                           // Reset position to end
                           while (this.peek().kind !== exports.TokenKind.Eof) {
                               this.next();
@@ -832,11 +880,21 @@ var JsonSearchEngine = (function (exports) {
                   return { type: "All" };
               case exports.TokenKind.Ident:
                   // Could be predicate or full-text term
+                  // Check for wildcard suffix (e.g., Prod* → starts with Prod)
+                  let identValue = tok.value;
+                  if (identValue.endsWith("*") && identValue.length > 1) {
+                      // Wildcard suffix - create StartsWith expression
+                      identValue = identValue.slice(0, -1);
+                      return { type: "StartsWith", value: identValue };
+                  }
                   if (this.isPredicateStart()) {
                       const pred = this.parsePredicate();
                       return { type: "Predicate", pred };
                   }
-                  return { type: "Term", value: tok.value };
+                  return { type: "Term", value: identValue };
+              case exports.TokenKind.Number:
+                  // Bare number in full-text search mode - treat as term
+                  return { type: "Term", value: String(tok.value) };
               case exports.TokenKind.Fuzzy:
                   this.next();
                   return { type: "FuzzyTerm", value: this.parseTerm() };
@@ -1451,30 +1509,29 @@ var JsonSearchEngine = (function (exports) {
   function evalExpr(expr, item, options, idx) {
       switch (expr.type) {
           case "Or":
-              // OR: any part matches
               return expr.parts.some(p => evalExpr(p, item, options, idx));
           case "And":
-              // AND: all parts match
               return expr.parts.every(p => evalExpr(p, item, options, idx));
           case "Not":
-              // NOT: negation
               return !evalExpr(expr.inner, item, options, idx);
           case "Term":
-              // Full-text search term
+              return containsText(item, expr.value, options);
+          case "StartsWith":
+              return startsWithText(item, expr.value, options.caseSensitive);
+          case "EndsWith":
+              return endsWithText(item, expr.value, options.caseSensitive);
+          case "Contains":
               return containsText(item, expr.value, options);
           case "FuzzyTerm":
-              // Fuzzy search term
               return fuzzyContainsText(item, expr.value, options);
           case "NumericTerm":
-              // Numeric comparison across all fields
               return numericContainsText(item, expr.value, expr.op);
           case "Predicate":
-              // Field comparison
               return evalPredicate(expr.pred, item, options, idx);
           case "All":
-              // Match everything
               return true;
       }
+      return false;
   }
   /**
    * Evaluate a predicate (field comparison) against a row.
@@ -1921,6 +1978,66 @@ var JsonSearchEngine = (function (exports) {
       if (value && typeof value === "object") {
           for (const v of Object.values(value)) {
               if (fuzzyContainsText(v, term, options))
+                  return true;
+          }
+      }
+      return false;
+  }
+  /**
+   * Starts with text - prefix matching for wildcard searches (Prod*)
+   */
+  function startsWithText(value, prefix, caseSensitive) {
+      const p = caseSensitive ? prefix : prefix.toLowerCase();
+      if (typeof value === "string") {
+          const v = caseSensitive ? value : value.toLowerCase();
+          return v.startsWith(p);
+      }
+      if (typeof value === "number") {
+          const s = value.toString();
+          const n = caseSensitive ? s : s.toLowerCase();
+          return n.startsWith(p);
+      }
+      if (typeof value === "boolean") {
+          const s = value.toString();
+          const n = caseSensitive ? s : s.toLowerCase();
+          return n.startsWith(p);
+      }
+      if (Array.isArray(value)) {
+          return value.some(v => startsWithText(v, prefix, caseSensitive));
+      }
+      if (value && typeof value === "object") {
+          for (const v of Object.values(value)) {
+              if (startsWithText(v, prefix, caseSensitive))
+                  return true;
+          }
+      }
+      return false;
+  }
+  /**
+   * Ends with text - suffix matching for *suffix patterns (*dia)
+   */
+  function endsWithText(value, suffix, caseSensitive) {
+      const s = caseSensitive ? suffix : suffix.toLowerCase();
+      if (typeof value === "string") {
+          const v = caseSensitive ? value : value.toLowerCase();
+          return v.endsWith(s);
+      }
+      if (typeof value === "number") {
+          const n = value.toString();
+          const v = caseSensitive ? n : n.toLowerCase();
+          return v.endsWith(s);
+      }
+      if (typeof value === "boolean") {
+          const n = value.toString();
+          const v = caseSensitive ? n : n.toLowerCase();
+          return v.endsWith(s);
+      }
+      if (Array.isArray(value)) {
+          return value.some(v => endsWithText(v, suffix, caseSensitive));
+      }
+      if (value && typeof value === "object") {
+          for (const v of Object.values(value)) {
+              if (endsWithText(v, suffix, caseSensitive))
                   return true;
           }
       }

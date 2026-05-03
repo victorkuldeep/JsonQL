@@ -155,6 +155,15 @@ export type Expr = {
     type: "Term";
     value: string;
 } | {
+    type: "StartsWith";
+    value: string;
+} | {
+    type: "EndsWith";
+    value: string;
+} | {
+    type: "Contains";
+    value: string;
+} | {
     type: "FuzzyTerm";
     value: string;
 } | {

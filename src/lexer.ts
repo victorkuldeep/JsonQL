@@ -127,10 +127,10 @@ export class Lexer {
           this.readString(c);
           break;
         default:
-          // Number or identifier
+          // Number or identifier (including * for wildcards like Prod*)
           if (isDigit(c) || (c === "." && isDigit(this.input[this.pos + 1]))) {
             this.readNumber();
-          } else if (isAlpha(c) || c === "_") {
+          } else if (isAlpha(c) || c === "_" || c === "*") {
             this.readIdent();
           } else {
             throw new QueryParseError(`Unexpected character: ${c}`, this.pos);
@@ -179,9 +179,22 @@ export class Lexer {
   private readNumber(): void {
     const start = this.pos;
     let s = "";
+    // Check if starts with 0 followed by more digits (like 000001 or 001)
+    let hasLeadingZeros = false;
     while (this.pos < this.input.length && (isDigit(this.input[this.pos]) || this.input[this.pos] === ".")) {
+      if (this.input[this.pos] === "0" && s === "") {
+        hasLeadingZeros = true;
+      }
       s += this.input[this.pos];
       this.pos++;
+    }
+    // If has leading zeros like 000001, treat entire thing as identifier
+    // Product codes like "000001" should be treated as string
+    if (hasLeadingZeros && s.length > 1) {
+      // Read as identifier instead
+      this.pos = start;
+      this.readIdent();
+      return;
     }
     const num = parseFloat(s);
     if (isNaN(num)) {
@@ -250,7 +263,7 @@ function isAlpha(c: string): boolean {
  * Used for field name validation.
  */
 function isAlphaNum(c: string): boolean {
-  return isAlpha(c) || isDigit(c) || c === "_" || c === ".";
+  return isAlpha(c) || isDigit(c) || c === "_" || c === "." || c === "*";
 }
 
 // ============================================================================

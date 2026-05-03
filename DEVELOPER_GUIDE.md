@@ -113,7 +113,45 @@ describe("NEWOP operator", () => {
 });
 ```
 
-## Running Specific Tests
+## Query Syntax Examples
+
+### Full-Text Search
+```typescript
+searchJson(data, "enterprise")          // Contains "enterprise"
+searchJson(data, "Product 000001")     // Multi-word search
+```
+
+### Wildcard Suffix Shorthand
+```typescript
+searchJson(data, "Prod*")               // Starts with "Prod" (LIKE "Prod%")
+searchJson(data, "*dia")              // Ends with "dia" (LIKE "%dia")
+searchJson(data, "*do*")              // Contains "do" (LIKE "%do%")
+```
+
+### Boolean Combinations
+```typescript
+searchJson(data, "enterprise AND cloud")     // Both terms
+searchJson(data, "enterprise OR cloud")     // Either term
+searchJson(data, "enterprise AND *work")   // Term + wildcard
+searchJson(data, "*ia OR *do")              // Wildcard combination
+```
+
+### SQL-Like Predicates
+```typescript
+searchJson(data, 'name = "USA"')
+searchJson(data, "age > 25")
+searchJson(data, 'name LIKE "%test%"')
+searchJson(data, 'name CONTAINS "test"')
+searchJson(data, "age > 18 AND age < 65")
+```
+
+### Sorting & Limits
+```typescript
+searchJson(data, "enterprise ORDER BY name")
+searchJson(data, "enterprise ORDER BY age DESC")
+searchJson(data, "enterprise LIMIT 10")
+searchJson(data, "enterprise LIMIT 10 OFFSET 20")
+```
 
 ```bash
 # Run tests matching pattern

@@ -167,6 +167,9 @@ export type Expr =
   | { type: "And"; parts: Expr[] }
   | { type: "Not"; inner: Expr }
   | { type: "Term"; value: string }
+  | { type: "StartsWith"; value: string }
+  | { type: "EndsWith"; value: string }
+  | { type: "Contains"; value: string }
   | { type: "FuzzyTerm"; value: string }
   | { type: "NumericTerm"; value: string; op: string }
   | { type: "Predicate"; pred: Predicate }

@@ -37,30 +37,29 @@ export function evalExpr(
 ): boolean {
   switch (expr.type) {
     case "Or":
-      // OR: any part matches
       return expr.parts.some(p => evalExpr(p, item, options, idx));
     case "And":
-      // AND: all parts match
       return expr.parts.every(p => evalExpr(p, item, options, idx));
     case "Not":
-      // NOT: negation
       return !evalExpr(expr.inner, item, options, idx);
     case "Term":
-      // Full-text search term
+      return containsText(item, expr.value, options);
+    case "StartsWith":
+      return startsWithText(item, expr.value, options.caseSensitive);
+    case "EndsWith":
+      return endsWithText(item, expr.value, options.caseSensitive);
+    case "Contains":
       return containsText(item, expr.value, options);
     case "FuzzyTerm":
-      // Fuzzy search term
       return fuzzyContainsText(item, expr.value, options);
     case "NumericTerm":
-      // Numeric comparison across all fields
       return numericContainsText(item, expr.value, expr.op);
     case "Predicate":
-      // Field comparison
       return evalPredicate(expr.pred, item, options, idx);
     case "All":
-      // Match everything
       return true;
   }
+  return false;
 }
 
 /**
@@ -541,6 +540,68 @@ function fuzzyContainsText(value: JsonValue, term: string, options: EvalOptions)
   if (value && typeof value === "object") {
     for (const v of Object.values(value)) {
       if (fuzzyContainsText(v as JsonValue, term, options)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Starts with text - prefix matching for wildcard searches (Prod*)
+ */
+function startsWithText(value: JsonValue, prefix: string, caseSensitive: boolean): boolean {
+  const p = caseSensitive ? prefix : prefix.toLowerCase();
+  
+  if (typeof value === "string") {
+    const v = caseSensitive ? value : value.toLowerCase();
+    return v.startsWith(p);
+  }
+  if (typeof value === "number") {
+    const s = value.toString();
+    const n = caseSensitive ? s : s.toLowerCase();
+    return n.startsWith(p);
+  }
+  if (typeof value === "boolean") {
+    const s = value.toString();
+    const n = caseSensitive ? s : s.toLowerCase();
+    return n.startsWith(p);
+  }
+  if (Array.isArray(value)) {
+    return value.some(v => startsWithText(v, prefix, caseSensitive));
+  }
+  if (value && typeof value === "object") {
+    for (const v of Object.values(value)) {
+      if (startsWithText(v as JsonValue, prefix, caseSensitive)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Ends with text - suffix matching for *suffix patterns (*dia)
+ */
+function endsWithText(value: JsonValue, suffix: string, caseSensitive: boolean): boolean {
+  const s = caseSensitive ? suffix : suffix.toLowerCase();
+  
+  if (typeof value === "string") {
+    const v = caseSensitive ? value : value.toLowerCase();
+    return v.endsWith(s);
+  }
+  if (typeof value === "number") {
+    const n = value.toString();
+    const v = caseSensitive ? n : n.toLowerCase();
+    return v.endsWith(s);
+  }
+  if (typeof value === "boolean") {
+    const n = value.toString();
+    const v = caseSensitive ? n : n.toLowerCase();
+    return v.endsWith(s);
+  }
+  if (Array.isArray(value)) {
+    return value.some(v => endsWithText(v, suffix, caseSensitive));
+  }
+  if (value && typeof value === "object") {
+    for (const v of Object.values(value)) {
+      if (endsWithText(v as JsonValue, suffix, caseSensitive)) return true;
     }
   }
   return false;

@@ -41,12 +41,18 @@ User Query: "enterprise cloud"
 | `name = "USA"` | Ident, Eq, String | SQL-like | Field comparison |
 | `> 350` | Gt, Number | Numeric | Compare all number fields |
 | `350` | Number, EOF | Full-text | Find number anywhere |
+| `Prod*` | Ident(*), EOF | Wildcard | Starts with "Prod" |
+| `*dia` | Ident(*), EOF | Wildcard | Ends with "dia" |
+| `*do*` | Ident(*), EOF | Wildcard | Contains "do" |
 
 ### Expression Types (AST)
 
 ```typescript
 type Expr =
   | { type: "Term"; value: string }        // Full-text search
+  | { type: "StartsWith"; value: string } // Prefix wildcard (Prod*)
+  | { type: "EndsWith"; value: string }   // Suffix wildcard (*dia)
+  | { type: "Contains"; value: string }  // Contains wildcard (*do*)
   | { type: "FuzzyTerm"; value: string } // Fuzzy matching
   | { type: "NumericTerm"; value: string; op: string } // Numeric comparison
   | { type: "Predicate"; pred: Predicate } // Field comparison
@@ -88,10 +94,11 @@ type Expr =
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Evaluator (Engine)                  │
-│   (670+ lines)                                        │
+│   (720+ lines)                                        │
 │                                                    │
-│  - Expression eval (Term, Fuzzy, Numeric, Predicate) │
+│  - Expression eval (Term, StartsWith, EndsWith, Contains, Fuzzy, Numeric, Predicate) │
 │  - Full-text matching                              │
+│  - Prefix/suffix matching (wildcard shortcuts)    │
 │  - Numeric comparison > >= < <=                   │
 │  - Predicate eval (=, !=, IN, LIKE, CONTAINS)      │
 │  - Sort comparison                                │
@@ -138,13 +145,14 @@ Tokenizes query strings into tokens.
 function tokenize(query: string): Token[]
 ```
 
-### 3. parser.ts (541 lines)
+### 3. parser.ts (870 lines)
 
 Builds AST from tokens.
 
 **Responsibilities:**
 - Parse SELECT, WHERE, ORDER BY, LIMIT, OFFSET clauses
 - Build Predicate tree with AND/OR/NOT operators
+- Wildcard pattern detection (prefix/suffix/contains)
 - Support all query operators (=, !=, >, >=, <, <=, LIKE, IN, BETWEEN, etc.)
 
 **Public API:**
@@ -273,36 +281,21 @@ export const VERSION = "1.0.0";
 ## Query Flow
 
 ```
-User Query
+User Query: "Prod* OR *dia"
     │
     ▼
 ┌─────────────┐
-│  Lexer      │  Tokenize query string
+│  Lexer      │  Tokenize: Ident("Prod*"), Ident("*dia"), EOF
 └─────────────┘
     │ Token[]
     ▼
 ┌─────────────┐
-│  Parser     │  Build Query AST
+│  Parser     │  detectWildcard() → StartsWith/EndsWith
 └─────────────┘
-    │ Query
+    │ Expr { type: "Or", parts: [...] }
     ▼
 ┌─────────────┐
-│  Cache      │  Check if parsed
-└─────────────┘
-    │ Parsed Query
-    ▼
-┌─────────────┐
-│  Engine     │  Evaluate against data
-└─────────────┘
-    │ Indices
-    ▼
-┌─────────────┐
-│  Index      │  Optional: use field index
-└─────────────┘
-    │ Indices
-    ▼
-┌─────────────┐
-│  Result     │  Map indices to rows
+│  Engine     │  evalExpr() → startsWithText()/endsWithText()
 └─────────────┘
     │ SearchResult { data, total }
 ```
@@ -335,8 +328,8 @@ dist/
 ├── types/                 # TypeScript declarations
 │   └── index.d.ts
 └── iife/                 # Browser bundles
-    ├── json-search-engine.js      # 72KB
-    └── json-search-engine.min.js # 30KB
+    ├── json-search-engine.js      # 118KB
+    └── json-search-engine.min.js # 39KB
 ```
 
 ## Dependencies
