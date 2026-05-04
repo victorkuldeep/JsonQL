@@ -100,6 +100,45 @@ describe("json-search-engine", () => {
     });
   });
 
+  describe("simple full-text boolean (implicit AND, parens, wildcards)", () => {
+    it("should match explicit AND with wildcards", () => {
+      const result = searchJson(sampleData, "India AND fib*");
+      expect(result.length).toBe(1);
+    });
+
+    it("should match explicit OR with wildcards", () => {
+      const r = searchJson(sampleData, "India OR fib*");
+      expect(r.length).toBe(4);
+    });
+
+    it("should support parenthesized OR same as bare OR", () => {
+      const a = searchJson(sampleData, "India OR fib*");
+      const b = searchJson(sampleData, "(India OR fib*)");
+      expect(b.length).toBe(a.length);
+    });
+
+    it("should support AND of parenthesized OR", () => {
+      const result = searchJson(sampleData, "India AND (fiber OR desk)");
+      expect(result.length).toBe(3);
+    });
+
+    it("should support nested parentheses", () => {
+      const result = searchJson(sampleData, "((India OR Australia) AND fiber)");
+      expect(result.length).toBe(2);
+    });
+
+    it("should treat adjacent terms as implicit AND", () => {
+      const a = searchJson(sampleData, "India fiber");
+      const b = searchJson(sampleData, "India AND fiber");
+      expect(a.length).toBe(b.length);
+    });
+
+    it("should combine number and following word as one term", () => {
+      const rows = [{ label: "10 Gbps port", speed: 10 }];
+      expect(searchJson(rows, "10 Gbps").length).toBe(1);
+    });
+  });
+
   describe("pagination", () => {
     it("should return paged results", () => {
       const result = searchJsonPaged(sampleData, "LIMIT 3");
