@@ -12,7 +12,7 @@ const sampleData = [
   { name: "Network Plus", country: "USA", category: "network", active: true, salary: 550000, tags: ["router"] },
 ];
 
-describe("JsonQL", () => {
+describe("json-query-lite", () => {
   describe("basic search", () => {
     it("should search with filter", () => {
       const result = searchJson(sampleData, 'category = "software"');

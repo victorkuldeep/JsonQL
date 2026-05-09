@@ -1,4 +1,4 @@
-# JsonQL
+# json-query-lite
 
 A pure JavaScript/TypeScript search engine for JSON arrays with a powerful SQL-like query language and BM25 relevance scoring.
 
@@ -17,7 +17,7 @@ A pure JavaScript/TypeScript search engine for JSON arrays with a powerful SQL-l
 ## Installation
 
 ```bash
-npm install jsonql
+npm install json-query-lite
 ```
 
 ## Quick Start
@@ -25,7 +25,7 @@ npm install jsonql
 ### ESM / TypeScript
 
 ```typescript
-import { searchJson, initEngine } from 'jsonql';
+import { searchJson, initEngine } from 'json-query-lite';
 
 const data = [
   { name: "John", country: "USA", salary: 1000000 },
@@ -44,7 +44,7 @@ console.log(results.data[0].SCORE); // Dynamic relevance match
 ### Browser / Salesforce LWC
 
 ```html
-<script src="jsonql.min.js"></script>
+<script src="json-query-lite.min.js"></script>
 <script>
   const engine = JsonSearchEngine.initEngine(data);
   const results = engine.search('country = "India" ORDER BY SCORE DESC');

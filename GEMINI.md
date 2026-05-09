@@ -1,6 +1,6 @@
-# Project Overview: JsonQL (json-search-engine)
+# Project Overview: json-query-lite
 
-JsonQL is a pure JavaScript/TypeScript search engine designed for JSON arrays, featuring a SQL-like query language. It supports smart search (auto-detecting full-text vs. SQL-like queries), field indexing, result caching, and complex aggregations.
+json-query-lite is a pure JavaScript/TypeScript search engine designed for JSON arrays, featuring a SQL-like query language. It supports smart search (auto-detecting full-text vs. SQL-like queries), field indexing, result caching, and complex aggregations.
 
 ## Tech Stack
 - **Language:** TypeScript

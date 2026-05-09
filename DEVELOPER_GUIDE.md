@@ -24,7 +24,7 @@ npm run build
 
 # Build browser bundles
 npm run build:iife     # IIFE bundle
-npm run build:min      # Minified IIFE (jsonql.min.js)
+npm run build:min      # Minified IIFE (json-query-lite.min.js)
 
 # Run Unit Tests (Vitest)
 npm test              # Run all 46+ tests

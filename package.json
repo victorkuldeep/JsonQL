@@ -1,5 +1,5 @@
 {
-  "name": "jsonql",
+  "name": "json-query-lite",
   "version": "1.0.0",
   "description": "Pure JavaScript/TypeScript JSON search engine with SQL-like query language",
   "main": "dist/cjs/index.js",
@@ -28,7 +28,7 @@
     "build:cjs": "tsc -p tsconfig.cjs.json",
     "build:types": "tsc -p tsconfig.json --emitDeclarationOnly",
     "build:iife": "rollup -c rollup.config.js",
-    "build:min": "terser dist/iife/jsonql.js -o dist/iife/jsonql.min.js --compress --mangle",
+    "build:min": "terser dist/iife/json-query-lite.js -o dist/iife/json-query-lite.min.js --compress --mangle",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src --ext .ts",

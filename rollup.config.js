@@ -5,7 +5,7 @@ export default defineConfig({
   input: "src/index.ts",
   plugins: [typescript()],
   output: {
-    file: "dist/iife/jsonql.js",
+    file: "dist/iife/json-query-lite.js",
     format: "iife",
     name: "JsonSearchEngine",
     sourcemap: true,

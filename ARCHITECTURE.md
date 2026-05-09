@@ -141,8 +141,8 @@ dist/
 ├── cjs/index.js          # CommonJS (Node.js)
 ├── types/                 # TypeScript declarations
 └── iife/                 # Browser bundles
-    ├── jsonql.js         # Standard bundle
-    └── jsonql.min.js     # Production minified
+    ├── json-query-lite.js         # Standard bundle
+    └── json-query-lite.min.js     # Production minified
 ```
 
 ## Dependencies
