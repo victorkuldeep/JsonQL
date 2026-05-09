@@ -165,7 +165,7 @@ export class Parser {
         case TokenKind.Order:
           this.next();
           this.expect(TokenKind.By, "Expected BY after ORDER");
-          orderBy.push(this.parseOrderBy());
+          orderBy.push(...this.parseOrderByList());
           break;
         case TokenKind.Limit:
           this.next();
@@ -460,9 +460,18 @@ export class Parser {
         pred = { field, op, values: [] };
         break;
       case Op.IsNull:
-      case Op.IsNotNull:
-        pred = { field, op, values: [] };
+      case Op.IsNotNull: {
+        const next = this.peek();
+        if (next.kind === TokenKind.Not) {
+          this.next(); // Consume NOT
+          this.expect(TokenKind.Null, "Expected NULL after IS NOT");
+          pred = { field, op: Op.IsNotNull, values: [] };
+        } else {
+          this.expect(TokenKind.Null, "Expected NULL after IS");
+          pred = { field, op: Op.IsNull, values: [] };
+        }
         break;
+      }
       case Op.Regex:
       case Op.NotRegex: {
         const lit = this.parseValue();
@@ -471,6 +480,20 @@ export class Parser {
         }
         validateRegexPattern(lit.value, this.peek().pos);
         pred = { field, op, values: [{ type: "Regex", value: lit.value }] };
+        break;
+      }
+      case Op.Eq: {
+        const val = this.parseValueFieldable();
+        if (val.type === "Str") {
+          const wt = detectWildcard(val.value);
+          if (wt) {
+            const newOp = wt.type === "StartsWith" ? Op.StartsWith : 
+                          wt.type === "EndsWith" ? Op.EndsWith : Op.Contains;
+            pred = { field, op: newOp, values: [{ type: "Str", value: wt.value }] };
+            break;
+          }
+        }
+        pred = { field, op, values: [val] };
         break;
       }
       default:
@@ -495,20 +518,27 @@ export class Parser {
    * Parse a literal value.
    */
   private parseValue(): ValueLit {
-    const tok = this.next();
-    switch (tok.kind) {
+    const tok = this.peek();
+    if (tok.kind === TokenKind.LBrack) {
+      this.next(); // Consume [
+      this.expect(TokenKind.RBrack, "Expected ']' after '['");
+      return { type: "Arr", value: [] };
+    }
+    
+    const nextTok = this.next();
+    switch (nextTok.kind) {
       case TokenKind.String:
-        return { type: "Str", value: tok.value as string };
+        return { type: "Str", value: nextTok.value as string };
       case TokenKind.Ident:
-        return { type: "Str", value: tok.value as string };
+        return { type: "Str", value: nextTok.value as string };
       case TokenKind.Number:
-        return { type: "Num", value: tok.value as number };
+        return { type: "Num", value: nextTok.value as number };
       case TokenKind.Bool:
-        return { type: "Bool", value: tok.value as boolean };
+        return { type: "Bool", value: nextTok.value as boolean };
       case TokenKind.Null:
         return { type: "Null" };
       default:
-        throw new QueryParseError("Expected value", tok.pos);
+        throw new QueryParseError("Expected value", nextTok.pos);
     }
   }
 
@@ -516,20 +546,27 @@ export class Parser {
    * Parse a value that can also be a field reference.
    */
   private parseValueFieldable(): ValueLit {
-    const tok = this.next();
-    switch (tok.kind) {
+    const tok = this.peek();
+    if (tok.kind === TokenKind.LBrack) {
+      this.next(); // Consume [
+      this.expect(TokenKind.RBrack, "Expected ']' after '['");
+      return { type: "Arr", value: [] };
+    }
+
+    const nextTok = this.next();
+    switch (nextTok.kind) {
       case TokenKind.String:
-        return { type: "Str", value: tok.value as string };
+        return { type: "Str", value: nextTok.value as string };
       case TokenKind.Ident:
-        return { type: "Field", value: tok.value as string };
+        return { type: "Field", value: nextTok.value as string };
       case TokenKind.Number:
-        return { type: "Num", value: tok.value as number };
+        return { type: "Num", value: nextTok.value as number };
       case TokenKind.Bool:
-        return { type: "Bool", value: tok.value as boolean };
+        return { type: "Bool", value: nextTok.value as boolean };
       case TokenKind.Null:
         return { type: "Null" };
       default:
-        throw new QueryParseError("Expected value", tok.pos);
+        throw new QueryParseError("Expected value", nextTok.pos);
     }
   }
 
@@ -604,7 +641,23 @@ export class Parser {
   }
 
   /**
-   * Parse ORDER BY clause.
+   * Parse ORDER BY clause with support for multiple comma-separated fields.
+   */
+  private parseOrderByList(): OrderBy[] {
+    const list: OrderBy[] = [];
+    while (true) {
+      list.push(this.parseOrderBy());
+      if (this.peek().kind === TokenKind.Comma) {
+        this.next();
+        continue;
+      }
+      break;
+    }
+    return list;
+  }
+
+  /**
+   * Parse a single sort specification in ORDER BY.
    */
   private parseOrderBy(): OrderBy {
     const tok = this.peek();

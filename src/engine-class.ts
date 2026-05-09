@@ -82,6 +82,10 @@ export class SearchEngine {
   private metrics = new EngineMetrics();
   /** Approximate memory usage */
   private approxBytes = 0;
+  /** Document lengths for BM25 */
+  private docLengths: Uint32Array = new Uint32Array(0);
+  /** Average document length for BM25 */
+  private avgdl = 0;
 
   /**
    * Create a new SearchEngine.
@@ -111,6 +115,16 @@ export class SearchEngine {
     
     // Calculate memory
     this.approxBytes = JSON.stringify(data).length;
+
+    // Calculate document lengths and avgdl for scoring
+    this.docLengths = new Uint32Array(data.length);
+    let totalLen = 0;
+    for (let i = 0; i < data.length; i++) {
+      const len = JSON.stringify(data[i]).length;
+      this.docLengths[i] = len;
+      totalLen += len;
+    }
+    this.avgdl = data.length > 0 ? totalLen / data.length : 0;
     
     // Reset cache and metrics
     this.resultCache = new ResultCache(DEFAULT_RESULT_CACHE_CAP, DEFAULT_RESULT_CACHE_MIN_HITS);
@@ -134,13 +148,17 @@ export class SearchEngine {
     // Check result cache
     const cached = this.resultCache.get(query);
     let indices: number[];
+    let scores: Map<number, number> | undefined;
 
     if (cached) {
       indices = cached;
       this.metrics.record(0, 0, true);
     } else {
-      // Execute search
-      indices = this.executeSearchIndices(parsed, options);
+          // Execute search
+      const res = this.executeSearchIndices(parsed, options);
+      indices = res.indices;
+      scores = res.scores;
+      const maxScore = res.maxScore;
       this.resultCache.record(query, indices);
       const elapsed = performance.now() - started;
       this.metrics.record(elapsed, indices.length, false);
@@ -151,11 +169,30 @@ export class SearchEngine {
       } else {
         this.resultCache.setMinHits(DEFAULT_RESULT_CACHE_MIN_HITS);
       }
+
+      // Map indices to rows and attach scores if requested
+      const offset = parsed.offset ?? 0;
+      const limit = parsed.limit ?? MAX_RESULT_ROWS;
+      const pagedIndices = indices.slice(offset, offset + limit);
+
+      const rows = pagedIndices.map(i => {
+        const row = this.data[i];
+        if (parsed.scoreNeeded && scores) {
+          const score = scores.get(i) || 0;
+          return { ...(row as object), SCORE: score } as JsonValue;
+        }
+        return row;
+      });
+
+      return { data: rows, total: indices.length, maxScore } as any;
     }
 
-    // Map indices to rows
-    const rows = indices.map(i => this.data[i]);
-    return { data: rows, total: indices.length };
+    // Map indices to rows (Cache hit case)
+    const offset = parsed.offset ?? 0;
+    const limit = parsed.limit ?? MAX_RESULT_ROWS;
+    const pagedIndices = indices.slice(offset, offset + limit);
+    const rows = pagedIndices.map(i => this.data[i]);
+    return { data: rows, total: indices.length } as any;
   }
 
   /**
@@ -178,12 +215,17 @@ export class SearchEngine {
     }
     const cached = this.resultCache.get(cacheKey);
     let indices: number[];
+    let scores: Map<number, number> | undefined;
+    let maxScore: number | undefined;
 
     if (cached) {
       indices = cached;
       this.metrics.record(0, 0, true);
     } else {
-      indices = this.executeSearchIndices(parsed, options);
+      const res = this.executeSearchIndices(parsed, options);
+      indices = res.indices;
+      scores = res.scores;
+      maxScore = res.maxScore;
       if (cacheKey) {
         this.resultCache.record(cacheKey, indices);
       }
@@ -194,37 +236,96 @@ export class SearchEngine {
     const limit = parsed.limit ?? MAX_RESULT_ROWS;
     const paged = indices.slice(offset, offset + limit);
 
-    const rows = paged.map(i => this.data[i]);
-    return { totalMatches: indices.length, rows };
+    const rows = paged.map(i => {
+      const row = this.data[i];
+      if (parsed.scoreNeeded && scores) {
+        const score = scores.get(i) || 0;
+        return { ...(row as object), SCORE: score } as JsonValue;
+      }
+      return row;
+    });
+    return { totalMatches: indices.length, rows, maxScore } as any;
   }
 
   /**
-   * Execute search and return row indices.
+   * Execute search and return row indices and scores.
    * Applies sorting if ORDER BY specified.
    */
-  executeSearchIndices(query: Query, options: { caseSensitive: boolean; strict: boolean }): number[] {
+  executeSearchIndices(query: Query, options: { caseSensitive: boolean; strict: boolean }): { indices: number[]; scores?: Map<number, number>; maxScore?: number } {
     const indices: number[] = [];
+    const hits: { idx: number; score: number }[] = [];
+    const dfMap = new Map<string, number>();
+    const tfList: Map<string, number>[] = [];
+    const scoreMap = new Map<number, number>();
+    let maxScore = 0;
+
+    // Pass 1: Filter and collect TFs/DFs if scoring needed
     for (let i = 0; i < this.data.length; i++) {
-      if (evalExpr(query.expr, this.data[i], options, i)) {
-        indices.push(i);
+      if (query.scoreNeeded) {
+        const scoreCtx = { tfs: new Map<string, number>(), dfs: dfMap };
+        if (evalExpr(query.expr, this.data[i], options, i, scoreCtx)) {
+          indices.push(i);
+          tfList.push(scoreCtx.tfs);
+          // Update global DFs for terms found in this doc
+          for (const term of scoreCtx.tfs.keys()) {
+            dfMap.set(term, (dfMap.get(term) || 0) + 1);
+          }
+        }
+      } else {
+        if (evalExpr(query.expr, this.data[i], options, i)) {
+          indices.push(i);
+        }
+      }
+    }
+
+    // Pass 2: Calculate BM25 scores if needed
+    if (query.scoreNeeded) {
+      const k1 = 1.2;
+      const b = 0.75;
+      const N = this.data.length;
+
+      for (let j = 0; j < indices.length; j++) {
+        const idx = indices[j];
+        const tfs = tfList[j];
+        const dl = this.docLengths[idx];
+        let score = 0;
+
+        for (const [term, tf] of tfs.entries()) {
+          const df = dfMap.get(term) || 0;
+          const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1);
+          // BM25 Formula
+          const termScore = idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / this.avgdl)));
+          score += termScore;
+        }
+        hits.push({ idx, score });
+        scoreMap.set(idx, score);
+        if (score > maxScore) maxScore = score;
       }
     }
 
     // Apply sorting
     if (query.orderBy.length > 0) {
-      const hits = indices.map(idx => ({
-        idx,
-        item: this.data[idx],
-      }));
+      const sortHits = query.scoreNeeded 
+        ? hits.map(h => ({ idx: h.idx, item: this.data[h.idx], score: h.score }))
+        : indices.map(idx => ({ idx, item: this.data[idx], score: 0 }));
 
-      hits.sort((a, b) => compareForSort(a.item, b.item, query.orderBy, options));
+      sortHits.sort((a, b) => compareForSort(a.item, b.item, query.orderBy, options, a.score, b.score));
 
       const offset = query.offset ?? 0;
       const limit = query.limit ?? MAX_RESULT_ROWS;
-      return hits.slice(offset, offset + limit).map(h => h.idx);
+      const finalIndices = sortHits.slice(offset, offset + limit).map(h => h.idx);
+      return { 
+        indices: finalIndices, 
+        scores: query.scoreNeeded ? scoreMap : undefined,
+        maxScore: query.scoreNeeded ? maxScore : undefined
+      };
     }
 
-    return indices;
+    return { 
+      indices, 
+      scores: query.scoreNeeded ? scoreMap : undefined,
+      maxScore: query.scoreNeeded ? maxScore : undefined
+    };
   }
 
   /**

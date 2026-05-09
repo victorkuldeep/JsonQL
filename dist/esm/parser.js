@@ -159,7 +159,7 @@ export class Parser {
                 case TokenKind.Order:
                     this.next();
                     this.expect(TokenKind.By, "Expected BY after ORDER");
-                    orderBy.push(this.parseOrderBy());
+                    orderBy.push(...this.parseOrderByList());
                     break;
                 case TokenKind.Limit:
                     this.next();
@@ -187,102 +187,7 @@ export class Parser {
                     break;
                 case TokenKind.Eof:
                     break;
-                case TokenKind.Ident:
-                case TokenKind.String:
-                case TokenKind.Number:
-                    {
-                        const terms = [];
-                        // Handle current token
-                        let tok = this.peek();
-                        let tokValue = String(tok.value);
-                        // Detect Number followed by Ident (e.g., "10 Gbps" -> "10 Gbps")
-                        if (tok.kind === TokenKind.Number) {
-                            const next = this.tokens[this.pos + 1];
-                            if (next && next.kind === TokenKind.Ident && !isPredicateOp(next.kind)) {
-                                // Combine Number + Ident into one term
-                                tokValue = tokValue + " " + next.value;
-                                this.next(); // consume Number
-                                this.next(); // consume Ident
-                                terms.push({ type: "Term", value: tokValue });
-                            }
-                            else {
-                                const wildcardType = detectWildcard(tokValue);
-                                if (wildcardType) {
-                                    terms.push(wildcardType);
-                                }
-                                else {
-                                    terms.push({ type: "Term", value: tokValue });
-                                }
-                                this.next();
-                            }
-                        }
-                        else {
-                            const wildcardType = detectWildcard(tokValue);
-                            if (wildcardType) {
-                                terms.push(wildcardType);
-                            }
-                            else {
-                                terms.push({ type: "Term", value: tokValue });
-                            }
-                            this.next();
-                        }
-                        // Collect more trailing terms only if no combined term was created
-                        if (!tokValue.includes(" ")) {
-                            while (this.peek().kind === TokenKind.Ident || this.peek().kind === TokenKind.String || this.peek().kind === TokenKind.Number) {
-                                const termTok = this.next();
-                                let value = String(termTok.value);
-                                const wt = detectWildcard(value);
-                                if (wt) {
-                                    terms.push(wt);
-                                }
-                                else {
-                                    terms.push({ type: "Term", value });
-                                }
-                            }
-                        }
-                        // Check for AND/OR operators
-                        if (this.peek().kind === TokenKind.And || this.peek().kind === TokenKind.Or) {
-                            const op = this.next();
-                            const rightTerms = [];
-                            while (this.peek().kind === TokenKind.Ident || this.peek().kind === TokenKind.String || this.peek().kind === TokenKind.Number) {
-                                const rightTok = this.next();
-                                let value = String(rightTok.value);
-                                const wt = detectWildcard(value);
-                                if (wt) {
-                                    rightTerms.push(wt);
-                                }
-                                else {
-                                    rightTerms.push({ type: "Term", value });
-                                }
-                            }
-                            if (rightTerms.length === 0) {
-                                throw new QueryParseError(`Expected term after AND/OR`, this.peek().pos);
-                            }
-                            const leftExpr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
-                            const rightExpr = rightTerms.length === 1 ? rightTerms[0] : { type: "And", parts: rightTerms };
-                            if (op.kind === TokenKind.And) {
-                                expr = { type: "And", parts: [leftExpr, rightExpr] };
-                            }
-                            else {
-                                expr = { type: "Or", parts: [leftExpr, rightExpr] };
-                            }
-                        }
-                        else {
-                            expr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
-                        }
-                        continue;
-                    }
-                    throw new QueryParseError("Unexpected trailing input", this.peek().pos);
                 default:
-                    // Allow trailing tokens for bare terms (full-text search)
-                    // Don't throw - just break and return what we parsed
-                    if (expr && (expr.type === "Term" || expr.type === "StartsWith" || expr.type === "EndsWith" || expr.type === "Contains" || expr.type === "FuzzyTerm" || expr.type === "All")) {
-                        // Reset position to end
-                        while (this.peek().kind !== TokenKind.Eof) {
-                            this.next();
-                        }
-                        break;
-                    }
                     throw new QueryParseError("Unexpected trailing input", this.peek().pos);
             }
         }
@@ -341,13 +246,33 @@ export class Parser {
      */
     parseAnd() {
         const parts = [this.parseNot()];
-        while (this.peek().kind === TokenKind.And) {
-            this.next();
-            parts.push(this.parseNot());
+        for (;;) {
+            if (this.peek().kind === TokenKind.And) {
+                this.next();
+                parts.push(this.parseNot());
+                continue;
+            }
+            if (this.isImplicitAndContinuance()) {
+                parts.push(this.parseNot());
+                continue;
+            }
+            break;
         }
         if (parts.length === 1)
             return parts[0];
         return { type: "And", parts };
+    }
+    /**
+     * Adjacent full-text operands without the AND keyword (smart-search / implicit AND).
+     */
+    isImplicitAndContinuance() {
+        const k = this.peek().kind;
+        return (k === TokenKind.Ident ||
+            k === TokenKind.String ||
+            k === TokenKind.Number ||
+            k === TokenKind.LParen ||
+            k === TokenKind.Fuzzy ||
+            k === TokenKind.Not);
     }
     /**
      * Parse NOT expression.
@@ -385,39 +310,47 @@ export class Parser {
                 return expr;
             case TokenKind.Eof:
                 return { type: "All" };
-            case TokenKind.Ident:
-                // Could be predicate or full-text term
-                // Check for wildcard suffix (e.g., Prod* → starts with Prod)
-                let identValue = tok.value;
-                if (identValue.endsWith("*") && identValue.length > 1) {
-                    // Wildcard suffix - create StartsWith expression
-                    identValue = identValue.slice(0, -1);
-                    return { type: "StartsWith", value: identValue };
-                }
+            case TokenKind.Ident: {
+                const identValue = tok.value;
                 if (this.isPredicateStart()) {
                     const pred = this.parsePredicate();
                     return { type: "Predicate", pred };
                 }
+                const wt = detectWildcard(identValue);
+                this.next();
+                if (wt)
+                    return wt;
                 return { type: "Term", value: identValue };
-            case TokenKind.Number:
-                // Bare number in full-text search mode - treat as term
-                return { type: "Term", value: String(tok.value) };
+            }
+            case TokenKind.Number: {
+                const numStr = String(tok.value);
+                const nextT = this.tokens[this.pos + 1];
+                if (nextT && nextT.kind === TokenKind.Ident && !isPredicateOp(nextT.kind)) {
+                    const combined = numStr + " " + String(nextT.value);
+                    this.next();
+                    this.next();
+                    const cwt = detectWildcard(combined);
+                    if (cwt)
+                        return cwt;
+                    return { type: "Term", value: combined };
+                }
+                this.next();
+                const nwt = detectWildcard(numStr);
+                if (nwt)
+                    return nwt;
+                return { type: "Term", value: numStr };
+            }
             case TokenKind.Fuzzy:
                 this.next();
                 return { type: "FuzzyTerm", value: this.parseTerm() };
-            case TokenKind.String:
-                return { type: "Term", value: tok.value };
-            case TokenKind.Number:
-                // Bare number with comparison? Try to parse as numeric predicate
-                // Look at next token - could be > >= < <= !
-                const next = this.tokens[this.pos + 1];
-                if (next && (next.kind === TokenKind.Gt || next.kind === TokenKind.Gte ||
-                    next.kind === TokenKind.Lt || next.kind === TokenKind.Lte ||
-                    next.kind === TokenKind.Neq)) {
-                    // This is a numeric comparison query - apply to all fields
-                    return { type: "Term", value: String(tok.value) };
-                }
-                return { type: "Term", value: String(tok.value) };
+            case TokenKind.String: {
+                const s = tok.value;
+                this.next();
+                const swt = detectWildcard(s);
+                if (swt)
+                    return swt;
+                return { type: "Term", value: s };
+            }
             case TokenKind.Gt:
             case TokenKind.Gte:
             case TokenKind.Lt:
@@ -512,9 +445,19 @@ export class Parser {
                 pred = { field, op, values: [] };
                 break;
             case Op.IsNull:
-            case Op.IsNotNull:
-                pred = { field, op, values: [] };
+            case Op.IsNotNull: {
+                const next = this.peek();
+                if (next.kind === TokenKind.Not) {
+                    this.next(); // Consume NOT
+                    this.expect(TokenKind.Null, "Expected NULL after IS NOT");
+                    pred = { field, op: Op.IsNotNull, values: [] };
+                }
+                else {
+                    this.expect(TokenKind.Null, "Expected NULL after IS");
+                    pred = { field, op: Op.IsNull, values: [] };
+                }
                 break;
+            }
             case Op.Regex:
             case Op.NotRegex: {
                 const lit = this.parseValue();
@@ -523,6 +466,20 @@ export class Parser {
                 }
                 validateRegexPattern(lit.value, this.peek().pos);
                 pred = { field, op, values: [{ type: "Regex", value: lit.value }] };
+                break;
+            }
+            case Op.Eq: {
+                const val = this.parseValueFieldable();
+                if (val.type === "Str") {
+                    const wt = detectWildcard(val.value);
+                    if (wt) {
+                        const newOp = wt.type === "StartsWith" ? Op.StartsWith :
+                            wt.type === "EndsWith" ? Op.EndsWith : Op.Contains;
+                        pred = { field, op: newOp, values: [{ type: "Str", value: wt.value }] };
+                        break;
+                    }
+                }
+                pred = { field, op, values: [val] };
                 break;
             }
             default:
@@ -544,40 +501,52 @@ export class Parser {
      * Parse a literal value.
      */
     parseValue() {
-        const tok = this.next();
-        switch (tok.kind) {
+        const tok = this.peek();
+        if (tok.kind === TokenKind.LBrack) {
+            this.next(); // Consume [
+            this.expect(TokenKind.RBrack, "Expected ']' after '['");
+            return { type: "Arr", value: [] };
+        }
+        const nextTok = this.next();
+        switch (nextTok.kind) {
             case TokenKind.String:
-                return { type: "Str", value: tok.value };
+                return { type: "Str", value: nextTok.value };
             case TokenKind.Ident:
-                return { type: "Str", value: tok.value };
+                return { type: "Str", value: nextTok.value };
             case TokenKind.Number:
-                return { type: "Num", value: tok.value };
+                return { type: "Num", value: nextTok.value };
             case TokenKind.Bool:
-                return { type: "Bool", value: tok.value };
+                return { type: "Bool", value: nextTok.value };
             case TokenKind.Null:
                 return { type: "Null" };
             default:
-                throw new QueryParseError("Expected value", tok.pos);
+                throw new QueryParseError("Expected value", nextTok.pos);
         }
     }
     /**
      * Parse a value that can also be a field reference.
      */
     parseValueFieldable() {
-        const tok = this.next();
-        switch (tok.kind) {
+        const tok = this.peek();
+        if (tok.kind === TokenKind.LBrack) {
+            this.next(); // Consume [
+            this.expect(TokenKind.RBrack, "Expected ']' after '['");
+            return { type: "Arr", value: [] };
+        }
+        const nextTok = this.next();
+        switch (nextTok.kind) {
             case TokenKind.String:
-                return { type: "Str", value: tok.value };
+                return { type: "Str", value: nextTok.value };
             case TokenKind.Ident:
-                return { type: "Field", value: tok.value };
+                return { type: "Field", value: nextTok.value };
             case TokenKind.Number:
-                return { type: "Num", value: tok.value };
+                return { type: "Num", value: nextTok.value };
             case TokenKind.Bool:
-                return { type: "Bool", value: tok.value };
+                return { type: "Bool", value: nextTok.value };
             case TokenKind.Null:
                 return { type: "Null" };
             default:
-                throw new QueryParseError("Expected value", tok.pos);
+                throw new QueryParseError("Expected value", nextTok.pos);
         }
     }
     /**
@@ -650,7 +619,22 @@ export class Parser {
         return fields;
     }
     /**
-     * Parse ORDER BY clause.
+     * Parse ORDER BY clause with support for multiple comma-separated fields.
+     */
+    parseOrderByList() {
+        const list = [];
+        while (true) {
+            list.push(this.parseOrderBy());
+            if (this.peek().kind === TokenKind.Comma) {
+                this.next();
+                continue;
+            }
+            break;
+        }
+        return list;
+    }
+    /**
+     * Parse a single sort specification in ORDER BY.
      */
     parseOrderBy() {
         const tok = this.peek();

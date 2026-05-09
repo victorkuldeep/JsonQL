@@ -97,6 +97,10 @@ var TokenKind;
     TokenKind["RParen"] = "RParen";
     /** , character - comma separator */
     TokenKind["Comma"] = "Comma";
+    /** [ character - left bracket */
+    TokenKind["LBrack"] = "LBrack";
+    /** ] character - right bracket */
+    TokenKind["RBrack"] = "RBrack";
     /** Identifier - field names, keywords */
     TokenKind["Ident"] = "Ident";
     /** String literal - quoted text */

@@ -81,6 +81,14 @@ export class Lexer {
                     this.tokens.push({ kind: TokenKind.Comma, value: null, pos: this.pos });
                     this.pos++;
                     break;
+                case "[":
+                    this.tokens.push({ kind: TokenKind.LBrack, value: null, pos: this.pos });
+                    this.pos++;
+                    break;
+                case "]":
+                    this.tokens.push({ kind: TokenKind.RBrack, value: null, pos: this.pos });
+                    this.pos++;
+                    break;
                 case "=":
                     this.tokens.push({ kind: TokenKind.Eq, value: null, pos: this.pos });
                     this.pos++;

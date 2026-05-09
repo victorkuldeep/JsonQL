@@ -24,30 +24,47 @@ import { getPath } from "./utils.js";
  * @param item - Data row to evaluate
  * @param options - Evaluation options (case sensitivity, strict mode)
  * @param idx - Row index (for scoring)
+ * @param scoreCtx - Optional context for tracking term frequencies
  * @returns Whether the row matches
  */
-export function evalExpr(expr, item, options, idx) {
+export function evalExpr(expr, item, options, idx, scoreCtx) {
     switch (expr.type) {
         case "Or":
+            if (scoreCtx) {
+                let matched = false;
+                for (const p of expr.parts) {
+                    if (evalExpr(p, item, options, idx, scoreCtx))
+                        matched = true;
+                }
+                return matched;
+            }
             return expr.parts.some(p => evalExpr(p, item, options, idx));
         case "And":
+            if (scoreCtx) {
+                let matched = true;
+                for (const p of expr.parts) {
+                    if (!evalExpr(p, item, options, idx, scoreCtx))
+                        matched = false;
+                }
+                return matched;
+            }
             return expr.parts.every(p => evalExpr(p, item, options, idx));
         case "Not":
-            return !evalExpr(expr.inner, item, options, idx);
+            return !evalExpr(expr.inner, item, options, idx, scoreCtx);
         case "Term":
-            return containsText(item, expr.value, options);
+            return containsText(item, expr.value, options, scoreCtx);
         case "StartsWith":
-            return startsWithText(item, expr.value, options.caseSensitive);
+            return startsWithText(item, expr.value, options.caseSensitive, scoreCtx);
         case "EndsWith":
-            return endsWithText(item, expr.value, options.caseSensitive);
+            return endsWithText(item, expr.value, options.caseSensitive, scoreCtx);
         case "Contains":
-            return containsText(item, expr.value, options);
+            return containsText(item, expr.value, options, scoreCtx);
         case "FuzzyTerm":
-            return fuzzyContainsText(item, expr.value, options);
+            return fuzzyContainsText(item, expr.value, options, scoreCtx);
         case "NumericTerm":
             return numericContainsText(item, expr.value, expr.op);
         case "Predicate":
-            return evalPredicate(expr.pred, item, options, idx);
+            return evalPredicate(expr.pred, item, options, idx, scoreCtx);
         case "All":
             return true;
     }
@@ -69,13 +86,14 @@ export function evalExpr(expr, item, options, idx) {
  * @param item - Data row
  * @param options - Evaluation options
  * @param idx - Row index
+ * @param scoreCtx - Optional context for tracking term frequencies
  * @returns Whether predicate matches
  */
-export function evalPredicate(pred, item, options, idx) {
+export function evalPredicate(pred, item, options, idx, scoreCtx) {
     // Get field value using dotted path (e.g., "meta.region")
     const target = getPath(item, pred.field);
     // Field doesn't exist
-    if (!target) {
+    if (target === undefined) {
         return pred.op === Op.IsNull;
     }
     switch (pred.op) {
@@ -83,7 +101,12 @@ export function evalPredicate(pred, item, options, idx) {
         case Op.Like:
             if (pred.values[0]?.type === "Str") {
                 if (typeof target === "string") {
-                    return likeMatch(target, pred.values[0].value, options.caseSensitive);
+                    const matched = likeMatch(target, pred.values[0].value, options.caseSensitive);
+                    if (matched && scoreCtx) {
+                        const count = countOccurrences(target, pred.values[0].value.replace(/%/g, ""), options.caseSensitive);
+                        scoreCtx.tfs.set(pred.values[0].value, (scoreCtx.tfs.get(pred.values[0].value) || 0) + count);
+                    }
+                    return matched;
                 }
             }
             return false;
@@ -111,7 +134,7 @@ export function evalPredicate(pred, item, options, idx) {
             return false;
         // IN operator - membership in list
         case Op.In:
-            return matchesIn(target, pred.values, item, options);
+            return matchesIn(target, pred.values, item, options, scoreCtx);
         case Op.NotIn:
             return !matchesIn(target, pred.values, item, options);
         // BETWEEN operator - numeric range
@@ -119,16 +142,16 @@ export function evalPredicate(pred, item, options, idx) {
             return betweenMatch(target, pred.values, item, options);
         // CONTAINS operator - substring
         case Op.Contains:
-            return containsMatch(target, pred.values[0], item, options);
+            return containsMatch(target, pred.values[0], item, options, scoreCtx);
         // FUZZY operator - fuzzy string matching
         case Op.Fuzzy:
-            return fuzzyMatch(target, pred.values[0], item, options);
+            return fuzzyMatch(target, pred.values[0], item, options, scoreCtx);
         // STARTS WITH operator - prefix
         case Op.StartsWith:
-            return startsWithMatch(target, pred.values[0], options.caseSensitive);
+            return startsWithMatch(target, pred.values[0], options.caseSensitive, scoreCtx);
         // ENDS WITH operator - suffix
         case Op.EndsWith:
-            return endsWithMatch(target, pred.values[0], options.caseSensitive);
+            return endsWithMatch(target, pred.values[0], options.caseSensitive, scoreCtx);
         // EXISTS operator - field exists
         case Op.Exists:
             return true;
@@ -172,14 +195,28 @@ var CmpOp;
  * Check if value is in list (IN operator).
  * Handles both single values and arrays.
  */
-function matchesIn(target, values, item, options) {
+function matchesIn(target, values, item, options, scoreCtx) {
     if (Array.isArray(target)) {
-        return target.some(v => valueInList(v, values, item, options));
+        let matched = false;
+        for (const v of target) {
+            if (valueInList(v, values, item, options, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
+        }
+        return matched;
     }
-    return valueInList(target, values, item, options);
+    return valueInList(target, values, item, options, scoreCtx);
 }
-function valueInList(target, values, item, options) {
-    return values.some(v => valueMatches(target, v, item, options));
+function valueInList(target, values, item, options, scoreCtx) {
+    let matched = false;
+    for (const v of values) {
+        if (valueMatches(target, v, item, options, scoreCtx))
+            matched = true;
+        if (matched && !scoreCtx)
+            break;
+    }
+    return matched;
 }
 /**
  * Compare using a comparison operator.
@@ -228,8 +265,14 @@ function compareValue(target, value, op, item, options) {
  * Check if target matches a literal value.
  * Handles type coercion in non-strict mode.
  */
-function valueMatches(target, value, item, options) {
+function valueMatches(target, value, item, options, scoreCtx) {
     switch (value.type) {
+        case "Arr": {
+            if (Array.isArray(target)) {
+                return target.length === 0 && value.value.length === 0;
+            }
+            return false;
+        }
         case "Field": {
             // Compare to another field's value
             const other = getPath(item, value.value);
@@ -237,9 +280,13 @@ function valueMatches(target, value, item, options) {
         }
         case "Str": {
             if (typeof target === "string") {
-                return options.caseSensitive
+                const matched = options.caseSensitive
                     ? target === value.value
                     : target.toLowerCase() === value.value.toLowerCase();
+                if (matched && scoreCtx) {
+                    scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+                }
+                return matched;
             }
             // Non-strict: parse string as number
             if (!options.strict && typeof target === "number") {
@@ -348,57 +395,89 @@ function betweenMatch(target, values, item, options) {
 /**
  * CONTAINS operator - check if string contains substring.
  */
-function containsMatch(target, value, item, options) {
+function containsMatch(target, value, item, options, scoreCtx) {
     if (!value || value.type !== "Str")
         return false;
     if (typeof target === "string") {
-        return options.caseSensitive
+        const matched = options.caseSensitive
             ? target.includes(value.value)
             : target.toLowerCase().includes(value.value.toLowerCase());
+        if (matched && scoreCtx) {
+            const count = countOccurrences(target, value.value, options.caseSensitive);
+            scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + count);
+        }
+        return matched;
     }
     // Array: any element contains
     if (Array.isArray(target)) {
-        return target.some(v => valueMatches(v, value, item, options));
+        let matched = false;
+        for (const v of target) {
+            if (valueMatches(v, value, item, options, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
+        }
+        return matched;
     }
     return false;
 }
 /**
  * FUZZY operator - fuzzy string matching.
  */
-function fuzzyMatch(target, value, item, options) {
+function fuzzyMatch(target, value, item, options, scoreCtx) {
     if (!value || value.type !== "Str")
         return false;
     if (typeof target === "string") {
-        return fuzzyMatchText(target, value.value, options);
+        const matched = fuzzyMatchText(target, value.value, options);
+        if (matched && scoreCtx) {
+            // For fuzzy, we'll treat it as a single match for now
+            scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+        }
+        return matched;
     }
     if (Array.isArray(target)) {
-        return target.some(v => fuzzyMatch(v, value, item, options));
+        let matched = false;
+        for (const v of target) {
+            if (fuzzyMatch(v, value, item, options, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
+        }
+        return matched;
     }
     return false;
 }
 /**
  * STARTS WITH operator - check if string starts with prefix.
  */
-function startsWithMatch(target, value, caseSensitive) {
+function startsWithMatch(target, value, caseSensitive, scoreCtx) {
     if (!value || value.type !== "Str")
         return false;
     if (typeof target === "string") {
-        return caseSensitive
-            ? target.startsWith(value.value)
-            : target.toLowerCase().startsWith(value.value.toLowerCase());
+        const v = caseSensitive ? target : target.toLowerCase();
+        const p = caseSensitive ? value.value : value.value.toLowerCase();
+        const matched = v.startsWith(p);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+        }
+        return matched;
     }
     return false;
 }
 /**
  * ENDS WITH operator - check if string ends with suffix.
  */
-function endsWithMatch(target, value, caseSensitive) {
+function endsWithMatch(target, value, caseSensitive, scoreCtx) {
     if (!value || value.type !== "Str")
         return false;
     if (typeof target === "string") {
-        return caseSensitive
-            ? target.endsWith(value.value)
-            : target.toLowerCase().endsWith(value.value.toLowerCase());
+        const v = caseSensitive ? target : target.toLowerCase();
+        const s = caseSensitive ? value.value : value.value.toLowerCase();
+        const matched = v.endsWith(s);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+        }
+        return matched;
     }
     return false;
 }
@@ -449,32 +528,56 @@ function escapeRegex(s) {
  * Full-text search - check if any field contains term.
  * Recursively searches objects, arrays, strings, numbers, booleans.
  */
-function containsText(value, term, options) {
+function containsText(value, term, options, scoreCtx) {
     if (typeof value === "string") {
-        return options.caseSensitive
+        const matched = options.caseSensitive
             ? value.includes(term)
             : value.toLowerCase().includes(term.toLowerCase());
+        if (matched && scoreCtx) {
+            const count = countOccurrences(value, term, options.caseSensitive);
+            scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + count);
+        }
+        return matched;
     }
     if (typeof value === "number") {
         const s = value.toString();
-        return options.caseSensitive
+        const matched = options.caseSensitive
             ? s.includes(term)
             : s.toLowerCase().includes(term.toLowerCase());
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+        }
+        return matched;
     }
     if (typeof value === "boolean") {
         const s = value.toString();
-        return options.caseSensitive
+        const matched = options.caseSensitive
             ? s.includes(term)
             : s.toLowerCase().includes(term.toLowerCase());
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+        }
+        return matched;
     }
     if (Array.isArray(value)) {
-        return value.some(v => containsText(v, term, options));
+        let matched = false;
+        for (const v of value) {
+            if (containsText(v, term, options, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
+        }
+        return matched;
     }
     if (value && typeof value === "object") {
+        let matched = false;
         for (const v of Object.values(value)) {
-            if (containsText(v, term, options))
-                return true;
+            if (containsText(v, term, options, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
         }
+        return matched;
     }
     return false;
 }
@@ -482,84 +585,153 @@ function containsText(value, term, options) {
  * Fuzzy text search - approximate string matching.
  * Uses Levenshtein distance for similarity.
  */
-function fuzzyContainsText(value, term, options) {
+function fuzzyContainsText(value, term, options, scoreCtx) {
     if (typeof value === "string") {
-        return fuzzyMatchText(value, term, options);
+        const matched = fuzzyMatchText(value, term, options);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+        }
+        return matched;
     }
     if (typeof value === "number") {
-        return fuzzyMatchText(value.toString(), term, options);
+        const matched = fuzzyMatchText(value.toString(), term, options);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+        }
+        return matched;
     }
     if (typeof value === "boolean") {
-        return fuzzyMatchText(value.toString(), term, options);
+        const matched = fuzzyMatchText(value.toString(), term, options);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+        }
+        return matched;
     }
     if (Array.isArray(value)) {
-        return value.some(v => fuzzyContainsText(v, term, options));
+        let matched = false;
+        for (const v of value) {
+            if (fuzzyContainsText(v, term, options, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
+        }
+        return matched;
     }
     if (value && typeof value === "object") {
+        let matched = false;
         for (const v of Object.values(value)) {
-            if (fuzzyContainsText(v, term, options))
-                return true;
+            if (fuzzyContainsText(v, term, options, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
         }
+        return matched;
     }
     return false;
 }
 /**
  * Starts with text - prefix matching for wildcard searches (Prod*)
  */
-function startsWithText(value, prefix, caseSensitive) {
+function startsWithText(value, prefix, caseSensitive, scoreCtx) {
     const p = caseSensitive ? prefix : prefix.toLowerCase();
     if (typeof value === "string") {
         const v = caseSensitive ? value : value.toLowerCase();
-        return v.startsWith(p);
+        const matched = v.startsWith(p);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(prefix, (scoreCtx.tfs.get(prefix) || 0) + 1);
+        }
+        return matched;
     }
     if (typeof value === "number") {
         const s = value.toString();
         const n = caseSensitive ? s : s.toLowerCase();
-        return n.startsWith(p);
+        const matched = n.startsWith(p);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(prefix, (scoreCtx.tfs.get(prefix) || 0) + 1);
+        }
+        return matched;
     }
     if (typeof value === "boolean") {
         const s = value.toString();
         const n = caseSensitive ? s : s.toLowerCase();
-        return n.startsWith(p);
+        const matched = n.startsWith(p);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(prefix, (scoreCtx.tfs.get(prefix) || 0) + 1);
+        }
+        return matched;
     }
     if (Array.isArray(value)) {
-        return value.some(v => startsWithText(v, prefix, caseSensitive));
+        let matched = false;
+        for (const v of value) {
+            if (startsWithText(v, prefix, caseSensitive, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
+        }
+        return matched;
     }
     if (value && typeof value === "object") {
+        let matched = false;
         for (const v of Object.values(value)) {
-            if (startsWithText(v, prefix, caseSensitive))
-                return true;
+            if (startsWithText(v, prefix, caseSensitive, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
         }
+        return matched;
     }
     return false;
 }
 /**
  * Ends with text - suffix matching for *suffix patterns (*dia)
  */
-function endsWithText(value, suffix, caseSensitive) {
+function endsWithText(value, suffix, caseSensitive, scoreCtx) {
     const s = caseSensitive ? suffix : suffix.toLowerCase();
     if (typeof value === "string") {
         const v = caseSensitive ? value : value.toLowerCase();
-        return v.endsWith(s);
+        const matched = v.endsWith(s);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(suffix, (scoreCtx.tfs.get(suffix) || 0) + 1);
+        }
+        return matched;
     }
     if (typeof value === "number") {
         const n = value.toString();
         const v = caseSensitive ? n : n.toLowerCase();
-        return v.endsWith(s);
+        const matched = v.endsWith(s);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(suffix, (scoreCtx.tfs.get(suffix) || 0) + 1);
+        }
+        return matched;
     }
     if (typeof value === "boolean") {
         const n = value.toString();
         const v = caseSensitive ? n : n.toLowerCase();
-        return v.endsWith(s);
+        const matched = v.endsWith(s);
+        if (matched && scoreCtx) {
+            scoreCtx.tfs.set(suffix, (scoreCtx.tfs.get(suffix) || 0) + 1);
+        }
+        return matched;
     }
     if (Array.isArray(value)) {
-        return value.some(v => endsWithText(v, suffix, caseSensitive));
+        let matched = false;
+        for (const v of value) {
+            if (endsWithText(v, suffix, caseSensitive, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
+        }
+        return matched;
     }
     if (value && typeof value === "object") {
+        let matched = false;
         for (const v of Object.values(value)) {
-            if (endsWithText(v, suffix, caseSensitive))
-                return true;
+            if (endsWithText(v, suffix, caseSensitive, scoreCtx))
+                matched = true;
+            if (matched && !scoreCtx)
+                break;
         }
+        return matched;
     }
     return false;
 }
@@ -608,6 +780,22 @@ function fuzzyMatchText(text, term, options) {
             return true;
     }
     return false;
+}
+/**
+ * Count all occurrences of a term in a text.
+ */
+function countOccurrences(text, term, caseSensitive) {
+    if (!term)
+        return 0;
+    const t = caseSensitive ? text : text.toLowerCase();
+    const s = caseSensitive ? term : term.toLowerCase();
+    let count = 0;
+    let pos = t.indexOf(s);
+    while (pos !== -1) {
+        count++;
+        pos = t.indexOf(s, pos + s.length);
+    }
+    return count;
 }
 /**
  * Tokenize text into words.
@@ -664,12 +852,14 @@ function levenshtein(a, b) {
  * @param b - Second row
  * @param orderBy - ORDER BY specifications
  * @param options - Evaluation options
+ * @param scoreA - Relevance score for row a
+ * @param scoreB - Relevance score for row b
  * @returns -1 if a < b, 1 if a > b, 0 if equal
  */
-export function compareForSort(a, b, orderBy, options) {
+export function compareForSort(a, b, orderBy, options, scoreA = 0, scoreB = 0) {
     for (const order of orderBy) {
-        let av = order.field.toUpperCase() === "SCORE" ? null : getPath(a, order.field);
-        let bv = order.field.toUpperCase() === "SCORE" ? null : getPath(b, order.field);
+        let av = order.field.toUpperCase() === "SCORE" ? scoreA : getPath(a, order.field);
+        let bv = order.field.toUpperCase() === "SCORE" ? scoreB : getPath(b, order.field);
         const nullsFirst = order.nullsFirst ?? false;
         let cmp = 0;
         // Handle undefined/null

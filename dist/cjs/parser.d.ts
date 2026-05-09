@@ -77,6 +77,10 @@ export declare class Parser {
      */
     private parseAnd;
     /**
+     * Adjacent full-text operands without the AND keyword (smart-search / implicit AND).
+     */
+    private isImplicitAndContinuance;
+    /**
      * Parse NOT expression.
      * Unary operator with highest precedence.
      * NOT a → { type: "Not", inner: a }
@@ -135,7 +139,11 @@ export declare class Parser {
      */
     private parseProjectionList;
     /**
-     * Parse ORDER BY clause.
+     * Parse ORDER BY clause with support for multiple comma-separated fields.
+     */
+    private parseOrderByList;
+    /**
+     * Parse a single sort specification in ORDER BY.
      */
     private parseOrderBy;
     /** Track nesting depth for parentheses */

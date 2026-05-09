@@ -48,6 +48,10 @@ export declare class SearchEngine {
     private metrics;
     /** Approximate memory usage */
     private approxBytes;
+    /** Document lengths for BM25 */
+    private docLengths;
+    /** Average document length for BM25 */
+    private avgdl;
     /**
      * Create a new SearchEngine.
      *
@@ -75,13 +79,17 @@ export declare class SearchEngine {
      */
     searchPaged(query: string): PagedResult;
     /**
-     * Execute search and return row indices.
+     * Execute search and return row indices and scores.
      * Applies sorting if ORDER BY specified.
      */
     executeSearchIndices(query: Query, options: {
         caseSensitive: boolean;
         strict: boolean;
-    }): number[];
+    }): {
+        indices: number[];
+        scores?: Map<number, number>;
+        maxScore?: number;
+    };
     /**
      * Run aggregations on data.
      *

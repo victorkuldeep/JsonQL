@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JsonQL Query Engine - Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .bg-grid { background-image: radial-gradient(#e5e7eb 1px, transparent 1px); background-size: 20px 20px; }
+    .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(8px); border: 1px solid rgba(229, 231, 235, 0.5); }
+    .score-bar { transition: width 0.5s ease-out; }
+    #queryInput::-webkit-scrollbar { width: 8px; }
+    #queryInput::-webkit-scrollbar-track { background: #0f172a; }
+    #queryInput::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .query-button { cursor: pointer; transition: all 0.2s ease; }
+    .query-button:hover { transform: translateX(4px); }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen pb-12">
+  <div class="bg-grid absolute inset-0 z-0 opacity-40 pointer-events-none"></div>
+
+  <div class="relative z-10 container mx-auto px-4 pt-8">
+    <!-- Header -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+      <div>
+        <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
+          <span class="bg-blue-600 text-white p-2 rounded-lg shadow-lg shadow-blue-200"><i class="fas fa-bolt"></i></span>
+          JsonQL Explorer
+        </h1>
+        <p class="text-slate-500 mt-1 font-medium italic">High-performance search on 50,000 JSON records</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="glass px-4 py-2 rounded-full flex items-center gap-2 shadow-sm border border-slate-200">
+          <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+          <span class="text-sm font-bold text-slate-700 uppercase tracking-tight" id="recordCountText">Loading Data...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Workspace -->
+    <div class="grid grid-cols-1 xl:grid-cols-4 gap-6">
+      
+      <!-- Left sidebar: Controls & Examples -->
+      <div class="xl:col-span-1 space-y-6">
+        <!-- Search Card -->
+        <div class="glass bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+          <div class="p-5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+            <h2 class="font-bold text-slate-800 flex items-center gap-2">
+              <i class="fas fa-terminal text-blue-500"></i>
+              Query Console
+            </h2>
+          </div>
+          <div class="p-5 space-y-4">
+            <div>
+              <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">JSON-QL Expression</label>
+              <textarea id="queryInput" 
+                class="w-full h-32 p-4 mono text-sm bg-slate-900 text-blue-400 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none shadow-inner resize-none border-none leading-relaxed"
+                placeholder="Type your search here..."></textarea>
+            </div>
+            <button id="runBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2 active:scale-95">
+              <i class="fas fa-play text-xs"></i>
+              EXECUTE
+            </button>
+          </div>
+        </div>
+
+        <!-- Query Library (Dynamic) -->
+        <div class="bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden flex flex-col flex-grow min-h-[500px]">
+          <div class="p-5 border-b border-slate-100 bg-slate-50/30">
+            <h2 class="font-bold text-slate-800">Query Library</h2>
+            <div class="mt-3 relative">
+              <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i>
+              <input type="text" id="librarySearch" placeholder="Search examples..." 
+                class="w-full pl-8 pr-4 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+          </div>
+          <div id="libraryContent" class="p-2 overflow-y-auto flex-grow max-h-[600px]">
+            <div class="p-8 text-center text-slate-400">
+              <i class="fas fa-spinner animate-spin mb-2"></i>
+              <p class="text-[10px] uppercase font-bold tracking-widest">Loading Library...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Panel: Results & Performance -->
+      <div class="xl:col-span-3 space-y-6">
+        
+        <!-- Metrics Dashboard -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Execution Time</div>
+            <div class="text-2xl font-bold text-slate-800 mt-1 flex items-baseline gap-1">
+              <span id="metricTime">0.00</span>
+              <span class="text-xs font-medium text-slate-400">ms</span>
+            </div>
+          </div>
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Matched Rows</div>
+            <div class="text-2xl font-bold text-slate-800 mt-1" id="metricMatches">0</div>
+          </div>
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Scanned</div>
+            <div class="text-2xl font-bold text-slate-800 mt-1" id="metricScanned">0</div>
+          </div>
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Engine Cache</div>
+            <div class="text-2xl font-bold mt-1 transition-colors" id="metricCache">MISS</div>
+          </div>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorMessage" class="hidden animate-in fade-in slide-in-from-top-2 duration-300">
+          <div class="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl shadow-sm flex items-center gap-3 text-red-700">
+            <i class="fas fa-exclamation-triangle"></i>
+            <div>
+              <span class="font-bold uppercase text-[10px] tracking-widest mr-2">Query Error</span>
+              <span id="errorText" class="mono text-xs"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Results Table Card -->
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden min-h-[600px] flex flex-col">
+          <div class="overflow-x-auto flex-grow">
+            <table class="w-full border-collapse text-left">
+              <thead class="bg-slate-50/80 backdrop-blur-sm sticky top-0 border-b border-slate-200 z-20" id="tableHead"></thead>
+              <tbody class="divide-y divide-slate-100" id="tableBody"></tbody>
+            </table>
+            
+            <!-- Empty State -->
+            <div id="emptyState" class="hidden p-24 text-center flex flex-col items-center justify-center space-y-4">
+              <div class="w-20 h-20 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center text-3xl shadow-inner">
+                <i class="fas fa-search"></i>
+              </div>
+              <div>
+                <h3 class="font-bold text-slate-800 text-lg tracking-tight">No results found</h3>
+                <p class="text-slate-500 max-w-xs mx-auto text-sm">Refine your expression or pick a use case from the left panel.</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="bg-slate-50 p-4 border-t border-slate-100 text-[10px] text-slate-400 text-center font-bold tracking-[0.2em] uppercase">
+            Displaying Top 50 Results • Engine Core v1.0.0
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="json-search-engine.min.js"></script>
+  <script>
+    let sampleData = [];
+    let engine = null;
+    let currentMaxScore = 0;
+    let queryLibrary = [];
+
+    // DOM Elements
+    const queryInput = document.getElementById('queryInput');
+    const runBtn = document.getElementById('runBtn');
+    const tableHead = document.getElementById('tableHead');
+    const tableBody = document.getElementById('tableBody');
+    const errorMessage = document.getElementById('errorMessage');
+    const errorText = document.getElementById('errorText');
+    const emptyState = document.getElementById('emptyState');
+    const recordCountText = document.getElementById('recordCountText');
+    const libraryContent = document.getElementById('libraryContent');
+    const librarySearch = document.getElementById('librarySearch');
+
+    /**
+     * Initialization
+     */
+    async function init() {
+      try {
+        console.log("Fetching dataset...");
+        const response = await fetch('dataset.json');
+        sampleData = await response.json();
+        
+        recordCountText.textContent = `${sampleData.length.toLocaleString()} Records Active`;
+        
+        // Init Engine
+        engine = JsonSearchEngine.initEngine(sampleData, {
+          indexes: ['country', 'category', 'active', 'id']
+        });
+
+        // Load Library
+        const libRes = await fetch('queries.json');
+        queryLibrary = await libRes.json();
+        renderLibrary();
+
+        // Default View
+        queryInput.value = "";
+        executeQuery();
+
+      } catch (err) {
+        console.error("Init Failed:", err);
+      }
+    }
+
+    /**
+     * Library Rendering
+     */
+    function renderLibrary(filter = "") {
+      const term = filter.toLowerCase();
+      libraryContent.innerHTML = "";
+
+      queryLibrary.forEach(cat => {
+        const filteredQueries = cat.queries.filter(q => 
+          q.label.toLowerCase().includes(term) || 
+          q.query.toLowerCase().includes(term) ||
+          q.description.toLowerCase().includes(term)
+        );
+
+        if (filteredQueries.length === 0) return;
+
+        const catEl = document.createElement('div');
+        catEl.className = "mb-6";
+        catEl.innerHTML = `
+          <h3 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1 px-2">${cat.category}</h3>
+          <div class="space-y-1">
+            ${filteredQueries.map(q => {
+              // Encode query for data attribute to safely handle quotes
+              const encodedQuery = q.query.replace(/"/g, '&quot;');
+              return `
+                <button class="lib-query-btn w-full text-left p-2 hover:bg-blue-50 rounded-lg transition-all group border border-transparent hover:border-blue-100" 
+                  data-query="${encodedQuery}">
+                  <span class="block text-xs font-bold text-slate-700 group-hover:text-blue-700 pointer-events-none">${q.label}</span>
+                  <code class="text-[9px] text-slate-400 font-medium italic truncate block pointer-events-none">${q.query}</code>
+                </button>
+              `;
+            }).join('')}
+          </div>
+        `;
+        libraryContent.appendChild(catEl);
+      });
+    }
+
+    function setQuery(q) {
+      queryInput.value = q;
+      executeQuery();
+    }
+
+    // Use event delegation for library clicks
+    libraryContent.addEventListener('click', (e) => {
+      const btn = e.target.closest('.lib-query-btn');
+      if (btn) {
+        const q = btn.getAttribute('data-query');
+        setQuery(q);
+      }
+    });
+
+    librarySearch.addEventListener('input', (e) => {
+      renderLibrary(e.target.value);
+    });
+
+    /**
+     * Core Search Execution
+     */
+    function executeQuery() {
+      if (!engine) return;
+      
+      const queryStr = queryInput.value.trim();
+      const startTime = performance.now();
+      
+      try {
+        errorMessage.classList.add('hidden');
+        console.log("Executing Query:", queryStr || "(Match All)");
+        
+        const results = engine.search(queryStr);
+        const elapsed = performance.now() - startTime;
+
+        currentMaxScore = results.maxScore || 0;
+        renderResults(results.data);
+        updateMetrics(results, elapsed);
+
+        emptyState.classList.toggle('hidden', results.data.length > 0);
+      } catch (e) {
+        console.warn("Query Execution Failed:", e);
+        errorMessage.classList.remove('hidden');
+        errorText.textContent = e.message;
+        renderResults([]);
+        emptyState.classList.remove('hidden');
+      }
+    }
+
+    /**
+     * Metrics UI Update
+     */
+    function updateMetrics(results, time) {
+      document.getElementById('metricTime').textContent = time.toFixed(2);
+      document.getElementById('metricMatches').textContent = results.total.toLocaleString();
+      
+      const metrics = engine.getMetrics();
+      document.getElementById('metricScanned').textContent = metrics.rowsScanned.toLocaleString();
+      
+      const cacheEl = document.getElementById('metricCache');
+      const isCache = time < 1.0;
+      cacheEl.textContent = isCache ? "HIT" : "MISS";
+      cacheEl.className = `text-2xl font-bold mt-1 ${isCache ? 'text-green-600' : 'text-blue-600'}`;
+    }
+
+    /**
+     * Table Rendering
+     */
+    function renderResults(data) {
+      if (!data || data.length === 0) {
+        tableHead.innerHTML = '';
+        tableBody.innerHTML = '';
+        return;
+      }
+
+      const columns = Object.keys(data[0]);
+      
+      tableHead.innerHTML = `<tr>${columns.map(col => `
+        <th class="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">${col}</th>
+      `).join('')}</tr>`;
+
+      const rows = data.slice(0, 50);
+      tableBody.innerHTML = rows.map(row => `
+        <tr class="hover:bg-slate-50/80 transition-all group">
+          ${columns.map(col => renderCell(row[col], col)).join('')}
+        </tr>
+      `).join('');
+    }
+
+    function renderCell(val, col) {
+      const tdClass = "px-6 py-4 text-sm whitespace-nowrap overflow-hidden";
+      
+      if (col === "SCORE") {
+        const score = parseFloat(val);
+        // Dynamic Normalization: Scale relative to the best match in the current result set
+        const intensity = currentMaxScore > 0 ? Math.min(100, (score / currentMaxScore) * 100).toFixed(0) : 0;
+        const relevancePct = currentMaxScore > 0 ? ((score / currentMaxScore) * 100).toFixed(0) : 0;
+        
+        return `
+          <td class="${tdClass}">
+            <div class="flex items-center gap-3">
+              <div class="flex flex-col">
+                <span class="font-bold text-blue-600 tabular-nums text-xs">${score.toFixed(2)}</span>
+                <span class="text-[9px] text-slate-400 font-medium">${relevancePct}% Match</span>
+              </div>
+              <div class="w-16 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div class="bg-blue-500 h-full score-bar shadow-[0_0_8px_rgba(59,130,246,0.5)]" style="width: ${intensity}%"></div>
+              </div>
+            </div>
+          </td>
+        `;
+      }
+
+      if (Array.isArray(val)) {
+        return `
+          <td class="${tdClass}">
+            <div class="flex flex-wrap gap-1">
+              ${val.slice(0, 2).map(v => `<span class="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[9px] font-bold uppercase border border-slate-200">${v}</span>`).join('')}
+              ${val.length > 2 ? `<span class="text-[9px] text-slate-400 font-bold ml-1">+${val.length - 2}</span>` : ''}
+            </div>
+          </td>
+        `;
+      }
+
+      if (typeof val === 'boolean') {
+        return `
+          <td class="${tdClass}">
+            <span class="px-2 py-0.5 rounded text-[9px] font-black tracking-tighter ${val ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-slate-100 text-slate-400 border border-slate-200'}">
+              ${val ? 'ACTIVE' : 'INACTIVE'}
+            </span>
+          </td>
+        `;
+      }
+
+      if (typeof val === 'number') {
+        return `<td class="${tdClass} mono font-semibold text-slate-700 tabular-nums">${val.toLocaleString()}</td>`;
+      }
+
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        const keys = Object.keys(val);
+        if (keys.length === 0) return `<td class="${tdClass} text-slate-300 italic">{}</td>`;
+        
+        // Create a pretty preview: "key: val, key: val"
+        const preview = keys.slice(0, 2).map(k => {
+          const v = val[k];
+          const vStr = typeof v === 'object' ? '{...}' : v;
+          return `<span class="text-blue-500 font-medium">${k}</span>: ${vStr}`;
+        }).join(', ');
+        
+        return `
+          <td class="${tdClass}">
+            <div class="text-[10px] mono text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100 inline-block max-w-[200px] truncate" title='${JSON.stringify(val)}'>
+              { ${preview}${keys.length > 2 ? '...' : ''} }
+            </div>
+          </td>
+        `;
+      }
+
+      const strVal = val ? val.toString() : '';
+      const displayVal = strVal.length > 30 ? strVal.substring(0, 27) + '...' : strVal;
+
+      return `<td class="${tdClass} text-slate-600 truncate max-w-[250px]" title="${strVal}">${displayVal || '<span class="text-slate-300 italic">null</span>'}</td>`;
+    }
+
+    // Event Listeners
+    runBtn.addEventListener('click', executeQuery);
+    
+    let timer;
+    queryInput.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(executeQuery, 250);
+    });
+
+    // Fire it up
+    init();
+  </script>
+</body>
+</html>

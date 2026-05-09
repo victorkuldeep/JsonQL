@@ -97,6 +97,10 @@ var JsonSearchEngine = (function (exports) {
       TokenKind["RParen"] = "RParen";
       /** , character - comma separator */
       TokenKind["Comma"] = "Comma";
+      /** [ character - left bracket */
+      TokenKind["LBrack"] = "LBrack";
+      /** ] character - right bracket */
+      TokenKind["RBrack"] = "RBrack";
       /** Identifier - field names, keywords */
       TokenKind["Ident"] = "Ident";
       /** String literal - quoted text */
@@ -257,6 +261,14 @@ var JsonSearchEngine = (function (exports) {
                       break;
                   case ",":
                       this.tokens.push({ kind: exports.TokenKind.Comma, value: null, pos: this.pos });
+                      this.pos++;
+                      break;
+                  case "[":
+                      this.tokens.push({ kind: exports.TokenKind.LBrack, value: null, pos: this.pos });
+                      this.pos++;
+                      break;
+                  case "]":
+                      this.tokens.push({ kind: exports.TokenKind.RBrack, value: null, pos: this.pos });
                       this.pos++;
                       break;
                   case "=":
@@ -678,7 +690,7 @@ var JsonSearchEngine = (function (exports) {
                   case exports.TokenKind.Order:
                       this.next();
                       this.expect(exports.TokenKind.By, "Expected BY after ORDER");
-                      orderBy.push(this.parseOrderBy());
+                      orderBy.push(...this.parseOrderByList());
                       break;
                   case exports.TokenKind.Limit:
                       this.next();
@@ -706,102 +718,7 @@ var JsonSearchEngine = (function (exports) {
                       break;
                   case exports.TokenKind.Eof:
                       break;
-                  case exports.TokenKind.Ident:
-                  case exports.TokenKind.String:
-                  case exports.TokenKind.Number:
-                      {
-                          const terms = [];
-                          // Handle current token
-                          let tok = this.peek();
-                          let tokValue = String(tok.value);
-                          // Detect Number followed by Ident (e.g., "10 Gbps" -> "10 Gbps")
-                          if (tok.kind === exports.TokenKind.Number) {
-                              const next = this.tokens[this.pos + 1];
-                              if (next && next.kind === exports.TokenKind.Ident && !isPredicateOp(next.kind)) {
-                                  // Combine Number + Ident into one term
-                                  tokValue = tokValue + " " + next.value;
-                                  this.next(); // consume Number
-                                  this.next(); // consume Ident
-                                  terms.push({ type: "Term", value: tokValue });
-                              }
-                              else {
-                                  const wildcardType = detectWildcard(tokValue);
-                                  if (wildcardType) {
-                                      terms.push(wildcardType);
-                                  }
-                                  else {
-                                      terms.push({ type: "Term", value: tokValue });
-                                  }
-                                  this.next();
-                              }
-                          }
-                          else {
-                              const wildcardType = detectWildcard(tokValue);
-                              if (wildcardType) {
-                                  terms.push(wildcardType);
-                              }
-                              else {
-                                  terms.push({ type: "Term", value: tokValue });
-                              }
-                              this.next();
-                          }
-                          // Collect more trailing terms only if no combined term was created
-                          if (!tokValue.includes(" ")) {
-                              while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String || this.peek().kind === exports.TokenKind.Number) {
-                                  const termTok = this.next();
-                                  let value = String(termTok.value);
-                                  const wt = detectWildcard(value);
-                                  if (wt) {
-                                      terms.push(wt);
-                                  }
-                                  else {
-                                      terms.push({ type: "Term", value });
-                                  }
-                              }
-                          }
-                          // Check for AND/OR operators
-                          if (this.peek().kind === exports.TokenKind.And || this.peek().kind === exports.TokenKind.Or) {
-                              const op = this.next();
-                              const rightTerms = [];
-                              while (this.peek().kind === exports.TokenKind.Ident || this.peek().kind === exports.TokenKind.String || this.peek().kind === exports.TokenKind.Number) {
-                                  const rightTok = this.next();
-                                  let value = String(rightTok.value);
-                                  const wt = detectWildcard(value);
-                                  if (wt) {
-                                      rightTerms.push(wt);
-                                  }
-                                  else {
-                                      rightTerms.push({ type: "Term", value });
-                                  }
-                              }
-                              if (rightTerms.length === 0) {
-                                  throw new QueryParseError(`Expected term after AND/OR`, this.peek().pos);
-                              }
-                              const leftExpr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
-                              const rightExpr = rightTerms.length === 1 ? rightTerms[0] : { type: "And", parts: rightTerms };
-                              if (op.kind === exports.TokenKind.And) {
-                                  expr = { type: "And", parts: [leftExpr, rightExpr] };
-                              }
-                              else {
-                                  expr = { type: "Or", parts: [leftExpr, rightExpr] };
-                              }
-                          }
-                          else {
-                              expr = terms.length === 1 ? terms[0] : { type: "And", parts: terms };
-                          }
-                          continue;
-                      }
-                      throw new QueryParseError("Unexpected trailing input", this.peek().pos);
                   default:
-                      // Allow trailing tokens for bare terms (full-text search)
-                      // Don't throw - just break and return what we parsed
-                      if (expr && (expr.type === "Term" || expr.type === "StartsWith" || expr.type === "EndsWith" || expr.type === "Contains" || expr.type === "FuzzyTerm" || expr.type === "All")) {
-                          // Reset position to end
-                          while (this.peek().kind !== exports.TokenKind.Eof) {
-                              this.next();
-                          }
-                          break;
-                      }
                       throw new QueryParseError("Unexpected trailing input", this.peek().pos);
               }
           }
@@ -860,13 +777,33 @@ var JsonSearchEngine = (function (exports) {
        */
       parseAnd() {
           const parts = [this.parseNot()];
-          while (this.peek().kind === exports.TokenKind.And) {
-              this.next();
-              parts.push(this.parseNot());
+          for (;;) {
+              if (this.peek().kind === exports.TokenKind.And) {
+                  this.next();
+                  parts.push(this.parseNot());
+                  continue;
+              }
+              if (this.isImplicitAndContinuance()) {
+                  parts.push(this.parseNot());
+                  continue;
+              }
+              break;
           }
           if (parts.length === 1)
               return parts[0];
           return { type: "And", parts };
+      }
+      /**
+       * Adjacent full-text operands without the AND keyword (smart-search / implicit AND).
+       */
+      isImplicitAndContinuance() {
+          const k = this.peek().kind;
+          return (k === exports.TokenKind.Ident ||
+              k === exports.TokenKind.String ||
+              k === exports.TokenKind.Number ||
+              k === exports.TokenKind.LParen ||
+              k === exports.TokenKind.Fuzzy ||
+              k === exports.TokenKind.Not);
       }
       /**
        * Parse NOT expression.
@@ -904,39 +841,47 @@ var JsonSearchEngine = (function (exports) {
                   return expr;
               case exports.TokenKind.Eof:
                   return { type: "All" };
-              case exports.TokenKind.Ident:
-                  // Could be predicate or full-text term
-                  // Check for wildcard suffix (e.g., Prod* → starts with Prod)
-                  let identValue = tok.value;
-                  if (identValue.endsWith("*") && identValue.length > 1) {
-                      // Wildcard suffix - create StartsWith expression
-                      identValue = identValue.slice(0, -1);
-                      return { type: "StartsWith", value: identValue };
-                  }
+              case exports.TokenKind.Ident: {
+                  const identValue = tok.value;
                   if (this.isPredicateStart()) {
                       const pred = this.parsePredicate();
                       return { type: "Predicate", pred };
                   }
+                  const wt = detectWildcard(identValue);
+                  this.next();
+                  if (wt)
+                      return wt;
                   return { type: "Term", value: identValue };
-              case exports.TokenKind.Number:
-                  // Bare number in full-text search mode - treat as term
-                  return { type: "Term", value: String(tok.value) };
+              }
+              case exports.TokenKind.Number: {
+                  const numStr = String(tok.value);
+                  const nextT = this.tokens[this.pos + 1];
+                  if (nextT && nextT.kind === exports.TokenKind.Ident && !isPredicateOp(nextT.kind)) {
+                      const combined = numStr + " " + String(nextT.value);
+                      this.next();
+                      this.next();
+                      const cwt = detectWildcard(combined);
+                      if (cwt)
+                          return cwt;
+                      return { type: "Term", value: combined };
+                  }
+                  this.next();
+                  const nwt = detectWildcard(numStr);
+                  if (nwt)
+                      return nwt;
+                  return { type: "Term", value: numStr };
+              }
               case exports.TokenKind.Fuzzy:
                   this.next();
                   return { type: "FuzzyTerm", value: this.parseTerm() };
-              case exports.TokenKind.String:
-                  return { type: "Term", value: tok.value };
-              case exports.TokenKind.Number:
-                  // Bare number with comparison? Try to parse as numeric predicate
-                  // Look at next token - could be > >= < <= !
-                  const next = this.tokens[this.pos + 1];
-                  if (next && (next.kind === exports.TokenKind.Gt || next.kind === exports.TokenKind.Gte ||
-                      next.kind === exports.TokenKind.Lt || next.kind === exports.TokenKind.Lte ||
-                      next.kind === exports.TokenKind.Neq)) {
-                      // This is a numeric comparison query - apply to all fields
-                      return { type: "Term", value: String(tok.value) };
-                  }
-                  return { type: "Term", value: String(tok.value) };
+              case exports.TokenKind.String: {
+                  const s = tok.value;
+                  this.next();
+                  const swt = detectWildcard(s);
+                  if (swt)
+                      return swt;
+                  return { type: "Term", value: s };
+              }
               case exports.TokenKind.Gt:
               case exports.TokenKind.Gte:
               case exports.TokenKind.Lt:
@@ -1031,9 +976,19 @@ var JsonSearchEngine = (function (exports) {
                   pred = { field, op, values: [] };
                   break;
               case exports.Op.IsNull:
-              case exports.Op.IsNotNull:
-                  pred = { field, op, values: [] };
+              case exports.Op.IsNotNull: {
+                  const next = this.peek();
+                  if (next.kind === exports.TokenKind.Not) {
+                      this.next(); // Consume NOT
+                      this.expect(exports.TokenKind.Null, "Expected NULL after IS NOT");
+                      pred = { field, op: exports.Op.IsNotNull, values: [] };
+                  }
+                  else {
+                      this.expect(exports.TokenKind.Null, "Expected NULL after IS");
+                      pred = { field, op: exports.Op.IsNull, values: [] };
+                  }
                   break;
+              }
               case exports.Op.Regex:
               case exports.Op.NotRegex: {
                   const lit = this.parseValue();
@@ -1042,6 +997,20 @@ var JsonSearchEngine = (function (exports) {
                   }
                   validateRegexPattern(lit.value, this.peek().pos);
                   pred = { field, op, values: [{ type: "Regex", value: lit.value }] };
+                  break;
+              }
+              case exports.Op.Eq: {
+                  const val = this.parseValueFieldable();
+                  if (val.type === "Str") {
+                      const wt = detectWildcard(val.value);
+                      if (wt) {
+                          const newOp = wt.type === "StartsWith" ? exports.Op.StartsWith :
+                              wt.type === "EndsWith" ? exports.Op.EndsWith : exports.Op.Contains;
+                          pred = { field, op: newOp, values: [{ type: "Str", value: wt.value }] };
+                          break;
+                      }
+                  }
+                  pred = { field, op, values: [val] };
                   break;
               }
               default:
@@ -1063,40 +1032,52 @@ var JsonSearchEngine = (function (exports) {
        * Parse a literal value.
        */
       parseValue() {
-          const tok = this.next();
-          switch (tok.kind) {
+          const tok = this.peek();
+          if (tok.kind === exports.TokenKind.LBrack) {
+              this.next(); // Consume [
+              this.expect(exports.TokenKind.RBrack, "Expected ']' after '['");
+              return { type: "Arr", value: [] };
+          }
+          const nextTok = this.next();
+          switch (nextTok.kind) {
               case exports.TokenKind.String:
-                  return { type: "Str", value: tok.value };
+                  return { type: "Str", value: nextTok.value };
               case exports.TokenKind.Ident:
-                  return { type: "Str", value: tok.value };
+                  return { type: "Str", value: nextTok.value };
               case exports.TokenKind.Number:
-                  return { type: "Num", value: tok.value };
+                  return { type: "Num", value: nextTok.value };
               case exports.TokenKind.Bool:
-                  return { type: "Bool", value: tok.value };
+                  return { type: "Bool", value: nextTok.value };
               case exports.TokenKind.Null:
                   return { type: "Null" };
               default:
-                  throw new QueryParseError("Expected value", tok.pos);
+                  throw new QueryParseError("Expected value", nextTok.pos);
           }
       }
       /**
        * Parse a value that can also be a field reference.
        */
       parseValueFieldable() {
-          const tok = this.next();
-          switch (tok.kind) {
+          const tok = this.peek();
+          if (tok.kind === exports.TokenKind.LBrack) {
+              this.next(); // Consume [
+              this.expect(exports.TokenKind.RBrack, "Expected ']' after '['");
+              return { type: "Arr", value: [] };
+          }
+          const nextTok = this.next();
+          switch (nextTok.kind) {
               case exports.TokenKind.String:
-                  return { type: "Str", value: tok.value };
+                  return { type: "Str", value: nextTok.value };
               case exports.TokenKind.Ident:
-                  return { type: "Field", value: tok.value };
+                  return { type: "Field", value: nextTok.value };
               case exports.TokenKind.Number:
-                  return { type: "Num", value: tok.value };
+                  return { type: "Num", value: nextTok.value };
               case exports.TokenKind.Bool:
-                  return { type: "Bool", value: tok.value };
+                  return { type: "Bool", value: nextTok.value };
               case exports.TokenKind.Null:
                   return { type: "Null" };
               default:
-                  throw new QueryParseError("Expected value", tok.pos);
+                  throw new QueryParseError("Expected value", nextTok.pos);
           }
       }
       /**
@@ -1169,7 +1150,22 @@ var JsonSearchEngine = (function (exports) {
           return fields;
       }
       /**
-       * Parse ORDER BY clause.
+       * Parse ORDER BY clause with support for multiple comma-separated fields.
+       */
+      parseOrderByList() {
+          const list = [];
+          while (true) {
+              list.push(this.parseOrderBy());
+              if (this.peek().kind === exports.TokenKind.Comma) {
+                  this.next();
+                  continue;
+              }
+              break;
+          }
+          return list;
+      }
+      /**
+       * Parse a single sort specification in ORDER BY.
        */
       parseOrderBy() {
           const tok = this.peek();
@@ -1530,30 +1526,47 @@ var JsonSearchEngine = (function (exports) {
    * @param item - Data row to evaluate
    * @param options - Evaluation options (case sensitivity, strict mode)
    * @param idx - Row index (for scoring)
+   * @param scoreCtx - Optional context for tracking term frequencies
    * @returns Whether the row matches
    */
-  function evalExpr(expr, item, options, idx) {
+  function evalExpr(expr, item, options, idx, scoreCtx) {
       switch (expr.type) {
           case "Or":
+              if (scoreCtx) {
+                  let matched = false;
+                  for (const p of expr.parts) {
+                      if (evalExpr(p, item, options, idx, scoreCtx))
+                          matched = true;
+                  }
+                  return matched;
+              }
               return expr.parts.some(p => evalExpr(p, item, options, idx));
           case "And":
+              if (scoreCtx) {
+                  let matched = true;
+                  for (const p of expr.parts) {
+                      if (!evalExpr(p, item, options, idx, scoreCtx))
+                          matched = false;
+                  }
+                  return matched;
+              }
               return expr.parts.every(p => evalExpr(p, item, options, idx));
           case "Not":
-              return !evalExpr(expr.inner, item, options, idx);
+              return !evalExpr(expr.inner, item, options, idx, scoreCtx);
           case "Term":
-              return containsText(item, expr.value, options);
+              return containsText(item, expr.value, options, scoreCtx);
           case "StartsWith":
-              return startsWithText(item, expr.value, options.caseSensitive);
+              return startsWithText(item, expr.value, options.caseSensitive, scoreCtx);
           case "EndsWith":
-              return endsWithText(item, expr.value, options.caseSensitive);
+              return endsWithText(item, expr.value, options.caseSensitive, scoreCtx);
           case "Contains":
-              return containsText(item, expr.value, options);
+              return containsText(item, expr.value, options, scoreCtx);
           case "FuzzyTerm":
-              return fuzzyContainsText(item, expr.value, options);
+              return fuzzyContainsText(item, expr.value, options, scoreCtx);
           case "NumericTerm":
               return numericContainsText(item, expr.value, expr.op);
           case "Predicate":
-              return evalPredicate(expr.pred, item, options, idx);
+              return evalPredicate(expr.pred, item, options, idx, scoreCtx);
           case "All":
               return true;
       }
@@ -1575,13 +1588,14 @@ var JsonSearchEngine = (function (exports) {
    * @param item - Data row
    * @param options - Evaluation options
    * @param idx - Row index
+   * @param scoreCtx - Optional context for tracking term frequencies
    * @returns Whether predicate matches
    */
-  function evalPredicate(pred, item, options, idx) {
+  function evalPredicate(pred, item, options, idx, scoreCtx) {
       // Get field value using dotted path (e.g., "meta.region")
       const target = getPath(item, pred.field);
       // Field doesn't exist
-      if (!target) {
+      if (target === undefined) {
           return pred.op === exports.Op.IsNull;
       }
       switch (pred.op) {
@@ -1589,7 +1603,12 @@ var JsonSearchEngine = (function (exports) {
           case exports.Op.Like:
               if (pred.values[0]?.type === "Str") {
                   if (typeof target === "string") {
-                      return likeMatch(target, pred.values[0].value, options.caseSensitive);
+                      const matched = likeMatch(target, pred.values[0].value, options.caseSensitive);
+                      if (matched && scoreCtx) {
+                          const count = countOccurrences(target, pred.values[0].value.replace(/%/g, ""), options.caseSensitive);
+                          scoreCtx.tfs.set(pred.values[0].value, (scoreCtx.tfs.get(pred.values[0].value) || 0) + count);
+                      }
+                      return matched;
                   }
               }
               return false;
@@ -1617,7 +1636,7 @@ var JsonSearchEngine = (function (exports) {
               return false;
           // IN operator - membership in list
           case exports.Op.In:
-              return matchesIn(target, pred.values, item, options);
+              return matchesIn(target, pred.values, item, options, scoreCtx);
           case exports.Op.NotIn:
               return !matchesIn(target, pred.values, item, options);
           // BETWEEN operator - numeric range
@@ -1625,16 +1644,16 @@ var JsonSearchEngine = (function (exports) {
               return betweenMatch(target, pred.values, item, options);
           // CONTAINS operator - substring
           case exports.Op.Contains:
-              return containsMatch(target, pred.values[0], item, options);
+              return containsMatch(target, pred.values[0], item, options, scoreCtx);
           // FUZZY operator - fuzzy string matching
           case exports.Op.Fuzzy:
-              return fuzzyMatch(target, pred.values[0], item, options);
+              return fuzzyMatch(target, pred.values[0], item, options, scoreCtx);
           // STARTS WITH operator - prefix
           case exports.Op.StartsWith:
-              return startsWithMatch(target, pred.values[0], options.caseSensitive);
+              return startsWithMatch(target, pred.values[0], options.caseSensitive, scoreCtx);
           // ENDS WITH operator - suffix
           case exports.Op.EndsWith:
-              return endsWithMatch(target, pred.values[0], options.caseSensitive);
+              return endsWithMatch(target, pred.values[0], options.caseSensitive, scoreCtx);
           // EXISTS operator - field exists
           case exports.Op.Exists:
               return true;
@@ -1678,14 +1697,28 @@ var JsonSearchEngine = (function (exports) {
    * Check if value is in list (IN operator).
    * Handles both single values and arrays.
    */
-  function matchesIn(target, values, item, options) {
+  function matchesIn(target, values, item, options, scoreCtx) {
       if (Array.isArray(target)) {
-          return target.some(v => valueInList(v, values, item, options));
+          let matched = false;
+          for (const v of target) {
+              if (valueInList(v, values, item, options, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
+          }
+          return matched;
       }
-      return valueInList(target, values, item, options);
+      return valueInList(target, values, item, options, scoreCtx);
   }
-  function valueInList(target, values, item, options) {
-      return values.some(v => valueMatches(target, v, item, options));
+  function valueInList(target, values, item, options, scoreCtx) {
+      let matched = false;
+      for (const v of values) {
+          if (valueMatches(target, v, item, options, scoreCtx))
+              matched = true;
+          if (matched && !scoreCtx)
+              break;
+      }
+      return matched;
   }
   /**
    * Compare using a comparison operator.
@@ -1734,8 +1767,14 @@ var JsonSearchEngine = (function (exports) {
    * Check if target matches a literal value.
    * Handles type coercion in non-strict mode.
    */
-  function valueMatches(target, value, item, options) {
+  function valueMatches(target, value, item, options, scoreCtx) {
       switch (value.type) {
+          case "Arr": {
+              if (Array.isArray(target)) {
+                  return target.length === 0 && value.value.length === 0;
+              }
+              return false;
+          }
           case "Field": {
               // Compare to another field's value
               const other = getPath(item, value.value);
@@ -1743,9 +1782,13 @@ var JsonSearchEngine = (function (exports) {
           }
           case "Str": {
               if (typeof target === "string") {
-                  return options.caseSensitive
+                  const matched = options.caseSensitive
                       ? target === value.value
                       : target.toLowerCase() === value.value.toLowerCase();
+                  if (matched && scoreCtx) {
+                      scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+                  }
+                  return matched;
               }
               // Non-strict: parse string as number
               if (!options.strict && typeof target === "number") {
@@ -1854,57 +1897,89 @@ var JsonSearchEngine = (function (exports) {
   /**
    * CONTAINS operator - check if string contains substring.
    */
-  function containsMatch(target, value, item, options) {
+  function containsMatch(target, value, item, options, scoreCtx) {
       if (!value || value.type !== "Str")
           return false;
       if (typeof target === "string") {
-          return options.caseSensitive
+          const matched = options.caseSensitive
               ? target.includes(value.value)
               : target.toLowerCase().includes(value.value.toLowerCase());
+          if (matched && scoreCtx) {
+              const count = countOccurrences(target, value.value, options.caseSensitive);
+              scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + count);
+          }
+          return matched;
       }
       // Array: any element contains
       if (Array.isArray(target)) {
-          return target.some(v => valueMatches(v, value, item, options));
+          let matched = false;
+          for (const v of target) {
+              if (valueMatches(v, value, item, options, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
+          }
+          return matched;
       }
       return false;
   }
   /**
    * FUZZY operator - fuzzy string matching.
    */
-  function fuzzyMatch(target, value, item, options) {
+  function fuzzyMatch(target, value, item, options, scoreCtx) {
       if (!value || value.type !== "Str")
           return false;
       if (typeof target === "string") {
-          return fuzzyMatchText(target, value.value, options);
+          const matched = fuzzyMatchText(target, value.value, options);
+          if (matched && scoreCtx) {
+              // For fuzzy, we'll treat it as a single match for now
+              scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+          }
+          return matched;
       }
       if (Array.isArray(target)) {
-          return target.some(v => fuzzyMatch(v, value, item, options));
+          let matched = false;
+          for (const v of target) {
+              if (fuzzyMatch(v, value, item, options, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
+          }
+          return matched;
       }
       return false;
   }
   /**
    * STARTS WITH operator - check if string starts with prefix.
    */
-  function startsWithMatch(target, value, caseSensitive) {
+  function startsWithMatch(target, value, caseSensitive, scoreCtx) {
       if (!value || value.type !== "Str")
           return false;
       if (typeof target === "string") {
-          return caseSensitive
-              ? target.startsWith(value.value)
-              : target.toLowerCase().startsWith(value.value.toLowerCase());
+          const v = caseSensitive ? target : target.toLowerCase();
+          const p = caseSensitive ? value.value : value.value.toLowerCase();
+          const matched = v.startsWith(p);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+          }
+          return matched;
       }
       return false;
   }
   /**
    * ENDS WITH operator - check if string ends with suffix.
    */
-  function endsWithMatch(target, value, caseSensitive) {
+  function endsWithMatch(target, value, caseSensitive, scoreCtx) {
       if (!value || value.type !== "Str")
           return false;
       if (typeof target === "string") {
-          return caseSensitive
-              ? target.endsWith(value.value)
-              : target.toLowerCase().endsWith(value.value.toLowerCase());
+          const v = caseSensitive ? target : target.toLowerCase();
+          const s = caseSensitive ? value.value : value.value.toLowerCase();
+          const matched = v.endsWith(s);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(value.value, (scoreCtx.tfs.get(value.value) || 0) + 1);
+          }
+          return matched;
       }
       return false;
   }
@@ -1955,32 +2030,56 @@ var JsonSearchEngine = (function (exports) {
    * Full-text search - check if any field contains term.
    * Recursively searches objects, arrays, strings, numbers, booleans.
    */
-  function containsText(value, term, options) {
+  function containsText(value, term, options, scoreCtx) {
       if (typeof value === "string") {
-          return options.caseSensitive
+          const matched = options.caseSensitive
               ? value.includes(term)
               : value.toLowerCase().includes(term.toLowerCase());
+          if (matched && scoreCtx) {
+              const count = countOccurrences(value, term, options.caseSensitive);
+              scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + count);
+          }
+          return matched;
       }
       if (typeof value === "number") {
           const s = value.toString();
-          return options.caseSensitive
+          const matched = options.caseSensitive
               ? s.includes(term)
               : s.toLowerCase().includes(term.toLowerCase());
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+          }
+          return matched;
       }
       if (typeof value === "boolean") {
           const s = value.toString();
-          return options.caseSensitive
+          const matched = options.caseSensitive
               ? s.includes(term)
               : s.toLowerCase().includes(term.toLowerCase());
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+          }
+          return matched;
       }
       if (Array.isArray(value)) {
-          return value.some(v => containsText(v, term, options));
+          let matched = false;
+          for (const v of value) {
+              if (containsText(v, term, options, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
+          }
+          return matched;
       }
       if (value && typeof value === "object") {
+          let matched = false;
           for (const v of Object.values(value)) {
-              if (containsText(v, term, options))
-                  return true;
+              if (containsText(v, term, options, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
           }
+          return matched;
       }
       return false;
   }
@@ -1988,84 +2087,153 @@ var JsonSearchEngine = (function (exports) {
    * Fuzzy text search - approximate string matching.
    * Uses Levenshtein distance for similarity.
    */
-  function fuzzyContainsText(value, term, options) {
+  function fuzzyContainsText(value, term, options, scoreCtx) {
       if (typeof value === "string") {
-          return fuzzyMatchText(value, term, options);
+          const matched = fuzzyMatchText(value, term, options);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+          }
+          return matched;
       }
       if (typeof value === "number") {
-          return fuzzyMatchText(value.toString(), term, options);
+          const matched = fuzzyMatchText(value.toString(), term, options);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+          }
+          return matched;
       }
       if (typeof value === "boolean") {
-          return fuzzyMatchText(value.toString(), term, options);
+          const matched = fuzzyMatchText(value.toString(), term, options);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(term, (scoreCtx.tfs.get(term) || 0) + 1);
+          }
+          return matched;
       }
       if (Array.isArray(value)) {
-          return value.some(v => fuzzyContainsText(v, term, options));
+          let matched = false;
+          for (const v of value) {
+              if (fuzzyContainsText(v, term, options, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
+          }
+          return matched;
       }
       if (value && typeof value === "object") {
+          let matched = false;
           for (const v of Object.values(value)) {
-              if (fuzzyContainsText(v, term, options))
-                  return true;
+              if (fuzzyContainsText(v, term, options, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
           }
+          return matched;
       }
       return false;
   }
   /**
    * Starts with text - prefix matching for wildcard searches (Prod*)
    */
-  function startsWithText(value, prefix, caseSensitive) {
+  function startsWithText(value, prefix, caseSensitive, scoreCtx) {
       const p = caseSensitive ? prefix : prefix.toLowerCase();
       if (typeof value === "string") {
           const v = caseSensitive ? value : value.toLowerCase();
-          return v.startsWith(p);
+          const matched = v.startsWith(p);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(prefix, (scoreCtx.tfs.get(prefix) || 0) + 1);
+          }
+          return matched;
       }
       if (typeof value === "number") {
           const s = value.toString();
           const n = caseSensitive ? s : s.toLowerCase();
-          return n.startsWith(p);
+          const matched = n.startsWith(p);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(prefix, (scoreCtx.tfs.get(prefix) || 0) + 1);
+          }
+          return matched;
       }
       if (typeof value === "boolean") {
           const s = value.toString();
           const n = caseSensitive ? s : s.toLowerCase();
-          return n.startsWith(p);
+          const matched = n.startsWith(p);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(prefix, (scoreCtx.tfs.get(prefix) || 0) + 1);
+          }
+          return matched;
       }
       if (Array.isArray(value)) {
-          return value.some(v => startsWithText(v, prefix, caseSensitive));
+          let matched = false;
+          for (const v of value) {
+              if (startsWithText(v, prefix, caseSensitive, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
+          }
+          return matched;
       }
       if (value && typeof value === "object") {
+          let matched = false;
           for (const v of Object.values(value)) {
-              if (startsWithText(v, prefix, caseSensitive))
-                  return true;
+              if (startsWithText(v, prefix, caseSensitive, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
           }
+          return matched;
       }
       return false;
   }
   /**
    * Ends with text - suffix matching for *suffix patterns (*dia)
    */
-  function endsWithText(value, suffix, caseSensitive) {
+  function endsWithText(value, suffix, caseSensitive, scoreCtx) {
       const s = caseSensitive ? suffix : suffix.toLowerCase();
       if (typeof value === "string") {
           const v = caseSensitive ? value : value.toLowerCase();
-          return v.endsWith(s);
+          const matched = v.endsWith(s);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(suffix, (scoreCtx.tfs.get(suffix) || 0) + 1);
+          }
+          return matched;
       }
       if (typeof value === "number") {
           const n = value.toString();
           const v = caseSensitive ? n : n.toLowerCase();
-          return v.endsWith(s);
+          const matched = v.endsWith(s);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(suffix, (scoreCtx.tfs.get(suffix) || 0) + 1);
+          }
+          return matched;
       }
       if (typeof value === "boolean") {
           const n = value.toString();
           const v = caseSensitive ? n : n.toLowerCase();
-          return v.endsWith(s);
+          const matched = v.endsWith(s);
+          if (matched && scoreCtx) {
+              scoreCtx.tfs.set(suffix, (scoreCtx.tfs.get(suffix) || 0) + 1);
+          }
+          return matched;
       }
       if (Array.isArray(value)) {
-          return value.some(v => endsWithText(v, suffix, caseSensitive));
+          let matched = false;
+          for (const v of value) {
+              if (endsWithText(v, suffix, caseSensitive, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
+          }
+          return matched;
       }
       if (value && typeof value === "object") {
+          let matched = false;
           for (const v of Object.values(value)) {
-              if (endsWithText(v, suffix, caseSensitive))
-                  return true;
+              if (endsWithText(v, suffix, caseSensitive, scoreCtx))
+                  matched = true;
+              if (matched && !scoreCtx)
+                  break;
           }
+          return matched;
       }
       return false;
   }
@@ -2114,6 +2282,22 @@ var JsonSearchEngine = (function (exports) {
               return true;
       }
       return false;
+  }
+  /**
+   * Count all occurrences of a term in a text.
+   */
+  function countOccurrences(text, term, caseSensitive) {
+      if (!term)
+          return 0;
+      const t = caseSensitive ? text : text.toLowerCase();
+      const s = caseSensitive ? term : term.toLowerCase();
+      let count = 0;
+      let pos = t.indexOf(s);
+      while (pos !== -1) {
+          count++;
+          pos = t.indexOf(s, pos + s.length);
+      }
+      return count;
   }
   /**
    * Tokenize text into words.
@@ -2170,12 +2354,14 @@ var JsonSearchEngine = (function (exports) {
    * @param b - Second row
    * @param orderBy - ORDER BY specifications
    * @param options - Evaluation options
+   * @param scoreA - Relevance score for row a
+   * @param scoreB - Relevance score for row b
    * @returns -1 if a < b, 1 if a > b, 0 if equal
    */
-  function compareForSort(a, b, orderBy, options) {
+  function compareForSort(a, b, orderBy, options, scoreA = 0, scoreB = 0) {
       for (const order of orderBy) {
-          let av = order.field.toUpperCase() === "SCORE" ? null : getPath(a, order.field);
-          let bv = order.field.toUpperCase() === "SCORE" ? null : getPath(b, order.field);
+          let av = order.field.toUpperCase() === "SCORE" ? scoreA : getPath(a, order.field);
+          let bv = order.field.toUpperCase() === "SCORE" ? scoreB : getPath(b, order.field);
           const nullsFirst = order.nullsFirst ?? false;
           let cmp = 0;
           // Handle undefined/null
@@ -3344,6 +3530,10 @@ var JsonSearchEngine = (function (exports) {
       metrics = new EngineMetrics();
       /** Approximate memory usage */
       approxBytes = 0;
+      /** Document lengths for BM25 */
+      docLengths = new Uint32Array(0);
+      /** Average document length for BM25 */
+      avgdl = 0;
       /**
        * Create a new SearchEngine.
        *
@@ -3369,6 +3559,15 @@ var JsonSearchEngine = (function (exports) {
           this.indexes.buildAll(data, indexFields);
           // Calculate memory
           this.approxBytes = JSON.stringify(data).length;
+          // Calculate document lengths and avgdl for scoring
+          this.docLengths = new Uint32Array(data.length);
+          let totalLen = 0;
+          for (let i = 0; i < data.length; i++) {
+              const len = JSON.stringify(data[i]).length;
+              this.docLengths[i] = len;
+              totalLen += len;
+          }
+          this.avgdl = data.length > 0 ? totalLen / data.length : 0;
           // Reset cache and metrics
           this.resultCache = new ResultCache(DEFAULT_RESULT_CACHE_CAP, DEFAULT_RESULT_CACHE_MIN_HITS);
           this.metrics = new EngineMetrics();
@@ -3389,13 +3588,17 @@ var JsonSearchEngine = (function (exports) {
           // Check result cache
           const cached = this.resultCache.get(query);
           let indices;
+          let scores;
           if (cached) {
               indices = cached;
               this.metrics.record(0, 0, true);
           }
           else {
               // Execute search
-              indices = this.executeSearchIndices(parsed, options);
+              const res = this.executeSearchIndices(parsed, options);
+              indices = res.indices;
+              scores = res.scores;
+              const maxScore = res.maxScore;
               this.resultCache.record(query, indices);
               const elapsed = performance.now() - started;
               this.metrics.record(elapsed, indices.length, false);
@@ -3406,9 +3609,25 @@ var JsonSearchEngine = (function (exports) {
               else {
                   this.resultCache.setMinHits(DEFAULT_RESULT_CACHE_MIN_HITS);
               }
+              // Map indices to rows and attach scores if requested
+              const offset = parsed.offset ?? 0;
+              const limit = parsed.limit ?? MAX_RESULT_ROWS;
+              const pagedIndices = indices.slice(offset, offset + limit);
+              const rows = pagedIndices.map(i => {
+                  const row = this.data[i];
+                  if (parsed.scoreNeeded && scores) {
+                      const score = scores.get(i) || 0;
+                      return { ...row, SCORE: score };
+                  }
+                  return row;
+              });
+              return { data: rows, total: indices.length, maxScore };
           }
-          // Map indices to rows
-          const rows = indices.map(i => this.data[i]);
+          // Map indices to rows (Cache hit case)
+          const offset = parsed.offset ?? 0;
+          const limit = parsed.limit ?? MAX_RESULT_ROWS;
+          const pagedIndices = indices.slice(offset, offset + limit);
+          const rows = pagedIndices.map(i => this.data[i]);
           return { data: rows, total: indices.length };
       }
       /**
@@ -3430,12 +3649,17 @@ var JsonSearchEngine = (function (exports) {
           }
           const cached = this.resultCache.get(cacheKey);
           let indices;
+          let scores;
+          let maxScore;
           if (cached) {
               indices = cached;
               this.metrics.record(0, 0, true);
           }
           else {
-              indices = this.executeSearchIndices(parsed, options);
+              const res = this.executeSearchIndices(parsed, options);
+              indices = res.indices;
+              scores = res.scores;
+              maxScore = res.maxScore;
               if (cacheKey) {
                   this.resultCache.record(cacheKey, indices);
               }
@@ -3444,32 +3668,89 @@ var JsonSearchEngine = (function (exports) {
           const offset = parsed.offset ?? 0;
           const limit = parsed.limit ?? MAX_RESULT_ROWS;
           const paged = indices.slice(offset, offset + limit);
-          const rows = paged.map(i => this.data[i]);
-          return { totalMatches: indices.length, rows };
+          const rows = paged.map(i => {
+              const row = this.data[i];
+              if (parsed.scoreNeeded && scores) {
+                  const score = scores.get(i) || 0;
+                  return { ...row, SCORE: score };
+              }
+              return row;
+          });
+          return { totalMatches: indices.length, rows, maxScore };
       }
       /**
-       * Execute search and return row indices.
+       * Execute search and return row indices and scores.
        * Applies sorting if ORDER BY specified.
        */
       executeSearchIndices(query, options) {
           const indices = [];
+          const hits = [];
+          const dfMap = new Map();
+          const tfList = [];
+          const scoreMap = new Map();
+          let maxScore = 0;
+          // Pass 1: Filter and collect TFs/DFs if scoring needed
           for (let i = 0; i < this.data.length; i++) {
-              if (evalExpr(query.expr, this.data[i], options, i)) {
-                  indices.push(i);
+              if (query.scoreNeeded) {
+                  const scoreCtx = { tfs: new Map(), dfs: dfMap };
+                  if (evalExpr(query.expr, this.data[i], options, i, scoreCtx)) {
+                      indices.push(i);
+                      tfList.push(scoreCtx.tfs);
+                      // Update global DFs for terms found in this doc
+                      for (const term of scoreCtx.tfs.keys()) {
+                          dfMap.set(term, (dfMap.get(term) || 0) + 1);
+                      }
+                  }
+              }
+              else {
+                  if (evalExpr(query.expr, this.data[i], options, i)) {
+                      indices.push(i);
+                  }
+              }
+          }
+          // Pass 2: Calculate BM25 scores if needed
+          if (query.scoreNeeded) {
+              const k1 = 1.2;
+              const b = 0.75;
+              const N = this.data.length;
+              for (let j = 0; j < indices.length; j++) {
+                  const idx = indices[j];
+                  const tfs = tfList[j];
+                  const dl = this.docLengths[idx];
+                  let score = 0;
+                  for (const [term, tf] of tfs.entries()) {
+                      const df = dfMap.get(term) || 0;
+                      const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1);
+                      // BM25 Formula
+                      const termScore = idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / this.avgdl)));
+                      score += termScore;
+                  }
+                  hits.push({ idx, score });
+                  scoreMap.set(idx, score);
+                  if (score > maxScore)
+                      maxScore = score;
               }
           }
           // Apply sorting
           if (query.orderBy.length > 0) {
-              const hits = indices.map(idx => ({
-                  idx,
-                  item: this.data[idx],
-              }));
-              hits.sort((a, b) => compareForSort(a.item, b.item, query.orderBy, options));
+              const sortHits = query.scoreNeeded
+                  ? hits.map(h => ({ idx: h.idx, item: this.data[h.idx], score: h.score }))
+                  : indices.map(idx => ({ idx, item: this.data[idx], score: 0 }));
+              sortHits.sort((a, b) => compareForSort(a.item, b.item, query.orderBy, options, a.score, b.score));
               const offset = query.offset ?? 0;
               const limit = query.limit ?? MAX_RESULT_ROWS;
-              return hits.slice(offset, offset + limit).map(h => h.idx);
+              const finalIndices = sortHits.slice(offset, offset + limit).map(h => h.idx);
+              return {
+                  indices: finalIndices,
+                  scores: query.scoreNeeded ? scoreMap : undefined,
+                  maxScore: query.scoreNeeded ? maxScore : undefined
+              };
           }
-          return indices;
+          return {
+              indices,
+              scores: query.scoreNeeded ? scoreMap : undefined,
+              maxScore: query.scoreNeeded ? maxScore : undefined
+          };
       }
       /**
        * Run aggregations on data.

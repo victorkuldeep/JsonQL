@@ -122,6 +122,10 @@ export enum TokenKind {
   RParen = "RParen",
   /** , character - comma separator */
   Comma = "Comma",
+  /** [ character - left bracket */
+  LBrack = "LBrack",
+  /** ] character - right bracket */
+  RBrack = "RBrack",
   /** Identifier - field names, keywords */
   Ident = "Ident",
   /** String literal - quoted text */
@@ -246,6 +250,7 @@ export type ValueLit =
   | { type: "Num"; value: number }     // Number literal
   | { type: "Bool"; value: boolean } // Boolean literal
   | { type: "Null" }              // Null literal
+  | { type: "Arr"; value: any[] }    // Array literal
   | { type: "Field"; value: string } // Reference to another field
   | { type: "Regex"; value: string } // Regex pattern string
   | { type: "RegexCompiled"; value: RegExp }; // Compiled regex
@@ -284,6 +289,17 @@ export interface OrderBy {
   desc: boolean;
   /** Null ordering preference */
   nullsFirst: boolean | null;
+}
+
+/**
+ * Context for tracking term frequencies (TF) and document frequencies (DF)
+ * during query evaluation for BM25 scoring.
+ */
+export interface ScoreContext {
+  /** Term frequencies in current document: term -> count */
+  tfs: Map<string, number>;
+  /** Global document frequencies: term -> count of docs containing term */
+  dfs: Map<string, number>;
 }
 
 /**
@@ -343,7 +359,6 @@ export interface IndexStats {
 // ============================================================================
 // Pagination Types
 // ============================================================================
-
 /**
  * Paged search result.
  */
@@ -352,6 +367,8 @@ export interface PagedResult {
   totalMatches: number;
   /** This page's records */
   rows: JsonValue[];
+  /** Maximum relevance score found in this search */
+  maxScore?: number;
 }
 
 // ============================================================================
@@ -458,6 +475,8 @@ export interface SearchResult {
   data: JsonValue[];
   /** Total matches (before limit) */
   total: number;
+  /** Maximum relevance score found in this search */
+  maxScore?: number;
 }
 
 /**

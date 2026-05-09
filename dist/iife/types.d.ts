@@ -108,6 +108,10 @@ export declare enum TokenKind {
     RParen = "RParen",
     /** , character - comma separator */
     Comma = "Comma",
+    /** [ character - left bracket */
+    LBrack = "LBrack",
+    /** ] character - right bracket */
+    RBrack = "RBrack",
     /** Identifier - field names, keywords */
     Ident = "Ident",
     /** String literal - quoted text */
@@ -252,6 +256,9 @@ export type ValueLit = {
 } | {
     type: "Null";
 } | {
+    type: "Arr";
+    value: any[];
+} | {
     type: "Field";
     value: string;
 } | {
@@ -294,6 +301,16 @@ export interface OrderBy {
     desc: boolean;
     /** Null ordering preference */
     nullsFirst: boolean | null;
+}
+/**
+ * Context for tracking term frequencies (TF) and document frequencies (DF)
+ * during query evaluation for BM25 scoring.
+ */
+export interface ScoreContext {
+    /** Term frequencies in current document: term -> count */
+    tfs: Map<string, number>;
+    /** Global document frequencies: term -> count of docs containing term */
+    dfs: Map<string, number>;
 }
 /**
  * Evaluation context options.
@@ -347,6 +364,8 @@ export interface PagedResult {
     totalMatches: number;
     /** This page's records */
     rows: JsonValue[];
+    /** Maximum relevance score found in this search */
+    maxScore?: number;
 }
 /**
  * Cache statistics.
@@ -430,6 +449,8 @@ export interface SearchResult {
     data: JsonValue[];
     /** Total matches (before limit) */
     total: number;
+    /** Maximum relevance score found in this search */
+    maxScore?: number;
 }
 /**
  * Index hit with relevance score.

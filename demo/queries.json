@@ -1,0 +1,77 @@
+[
+  {
+    "category": "⚡ Relevance (BM25)",
+    "queries": [
+      { "label": "Single Term Rank", "query": "fiber ORDER BY SCORE DESC", "description": "Rank by frequency of the term 'fiber'." },
+      { "label": "Multi-term AND (Implicit)", "query": "switch fiber ORDER BY SCORE DESC", "description": "High rank for records containing both terms." },
+      { "label": "Multi-term OR", "query": "switch OR fiber ORDER BY SCORE DESC", "description": "Rank records matching either term." },
+      { "label": "Exact Phrase Search", "query": "\"enterprise grade\" ORDER BY SCORE DESC", "description": "Find exact matches for the phrase." },
+      { "label": "Note Relevance", "query": "backbone ORDER BY SCORE DESC", "description": "Find records with 'backbone' in any field." },
+      { "label": "Weighted Discovery", "query": "cloud analytics ORDER BY SCORE DESC", "description": "Discover related infrastructure components." },
+      { "label": "Rare Term Boost", "query": "\"fiber-optics\" ORDER BY SCORE DESC", "description": "Rare terms get higher IDF scores." },
+      { "label": "Common Term Penalty", "query": "Product ORDER BY SCORE DESC", "description": "Common terms get lower relevance weight." },
+      { "label": "Scoring + Filter", "query": "country = \"USA\" AND cloud ORDER BY SCORE DESC", "description": "Relevance ranking within a specific country." },
+      { "label": "Fuzzy Relevance", "query": "FUZZY \"enterprse\" ORDER BY SCORE DESC", "description": "Rank by similarity to a misspelled term." }
+    ]
+  },
+  {
+    "category": "🔍 Field Filtering",
+    "queries": [
+      { "label": "Exact Match", "query": "country = \"India\"", "description": "Simple equality check." },
+      { "label": "Not Equal", "query": "category != \"software\"", "description": "Exclude a specific category." },
+      { "label": "Numeric Range (>)", "query": "salary > 2500000", "description": "Filter by high salary values." },
+      { "label": "Numeric Range (<)", "query": "price < 500", "description": "Find low-cost products." },
+      { "label": "Between Range", "query": "salary BETWEEN (1000000, 1500000)", "description": "Find values in a specific range." },
+      { "label": "In-List Membership", "query": "country IN (\"Japan\", \"Singapore\", \"Canada\")", "description": "Match any value in the provided list." },
+      { "label": "Active State", "query": "active = true", "description": "Filter by boolean status." },
+      { "label": "Inactive State", "query": "active = false", "description": "Filter by inactive records." },
+      { "label": "Multiple Equality", "query": "country = \"Brazil\" AND category = \"iot\"", "description": "Strict multi-field match." },
+      { "label": "Negative Selection", "query": "NOT country = \"UK\"", "description": "Select everything except one country." }
+    ]
+  },
+  {
+    "category": "🗂️ Array & Object Search",
+    "queries": [
+      { "label": "Array Contains", "query": "tags CONTAINS \"fiber\"", "description": "Find records where the tag list includes 'fiber'." },
+      { "label": "Array Intersection", "query": "tags CONTAINS \"switch\" AND tags CONTAINS \"router\"", "description": "Find records having both specific tags." },
+      { "label": "Skills Search", "query": "skills CONTAINS \"RUST\"", "description": "Find records with specific skill arrays." },
+      { "label": "Nested Object Match", "query": "meta.region = \"LATAM\"", "description": "Search inside the 'meta' object using dotted paths." },
+      { "label": "Nested Ownership", "query": "meta.owner = \"team-a\"", "description": "Filter by sub-property." },
+      { "label": "Existence Check", "query": "meta.region EXISTS", "description": "Find records where a nested field is present." },
+      { "label": "Null Check", "query": "notes IS NULL", "description": "Find records with missing notes." },
+      { "label": "Not Null Check", "query": "notes IS NOT NULL", "description": "Find records that have populated notes." },
+      { "label": "Array Empty Check", "query": "tags = []", "description": "Find records with no tags." },
+      { "label": "Complex Nested Logic", "query": "meta.region = \"EU\" AND tags CONTAINS \"billing\"", "description": "Mix nested fields with array contents." }
+    ]
+  },
+  {
+    "category": "✨ Advanced & Wildcards",
+    "queries": [
+      { "label": "Prefix Wildcard", "query": "name = \"Prod*\"", "description": "Match names starting with 'Prod'." },
+      { "label": "Suffix Wildcard", "query": "notes = \"*backbone\"", "description": "Match notes ending with 'backbone'." },
+      { "label": "Middle Wildcard", "query": "notes = \"*support*\"", "description": "Contains search using wildcard syntax." },
+      { "label": "LIKE Pattern (%)", "query": "name LIKE \"Product %1\"", "description": "SQL-style wildcard matching." },
+      { "label": "LIKE Character (_)", "query": "name LIKE \"Product 00000_\"", "description": "Match single character placeholders." },
+      { "label": "Regex Search", "query": "name REGEX \"^Product 0[0-4]\"", "description": "Powerful regular expression matching." },
+      { "label": "Fuzzy Search (Levenshtein)", "query": "FUZZY \"monitering\"", "description": "Find 'monitoring' even with a typo." },
+      { "label": "Global Numeric (>)", "query": "> 2900000", "description": "Search ALL numeric fields for values greater than X." },
+      { "label": "Global Numeric (<)", "query": "< 100", "description": "Find any record with any field value less than 100." },
+      { "label": "Combined Smart Search", "query": "India AND > 2500000", "description": "Mix text term with global numeric comparison." }
+    ]
+  },
+  {
+    "category": "📊 Projections & Multi-Sort",
+    "queries": [
+      { "label": "Column Selection", "query": "SELECT name, category WHERE fiber", "description": "Return only specific fields." },
+      { "label": "Select SCORE", "query": "SELECT name, SCORE WHERE fiber ORDER BY SCORE DESC", "description": "Include the relevance score in results." },
+      { "label": "Multi-Column Sort", "query": "ORDER BY country ASC, salary DESC", "description": "Sort by country, then highest salary." },
+      { "label": "Ranked Multi-Sort", "query": "fiber ORDER BY country ASC, SCORE DESC", "description": "Alpha sort by country, best match within." },
+      { "label": "Pagination (Limit)", "query": "SELECT name LIMIT 5", "description": "Get only the first 5 records." },
+      { "label": "Offset (Skip)", "query": "SELECT name LIMIT 5 OFFSET 10", "description": "Skip records for pagination." },
+      { "label": "Nulls First Sort", "query": "ORDER BY notes ASC NULLS FIRST", "description": "Control where null values appear in sort." },
+      { "label": "Nulls Last Sort", "query": "ORDER BY notes ASC NULLS LAST", "description": "Push nulls to the bottom of the list." },
+      { "label": "Strict Mode Search", "query": "salary > 1000000 STRICT", "description": "Disable type coercion during search." },
+      { "label": "Case Sensitive Search", "query": "\"India\" CASE SENSITIVE", "description": "Enforce case matching." }
+    ]
+  }
+]
