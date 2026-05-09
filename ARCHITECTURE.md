@@ -1,4 +1,4 @@
-# JSON Search Engine Architecture
+# JsonQL Architecture
 
 A pure JavaScript/TypeScript search engine for JSON arrays with SQL-like query language.
 
@@ -61,12 +61,24 @@ type Expr =
   | { type: "All" };                // Match all
 ```
 
+## Relevance Scoring (BM25)
+
+JsonQL implements the **BM25 (Best Matching 25)** algorithm for ranking results. This elevates the engine from simple boolean filtering to professional discovery.
+
+### How it Works
+1. **Term Frequency (TF):** Matches are weighted by how often terms appear in a document, with saturation.
+2. **Inverse Document Frequency (IDF):** Rare terms are given more weight than common terms.
+3. **Document Length Normalization:** Matches in shorter documents rank higher than matches in long ones.
+
+### Dynamic Normalization (0-100%)
+The engine calculates the `maxScore` for every query and scales all results relative to it. This provides a user-friendly "Match Percentage" that remains consistent regardless of dataset size (50k vs 1M records).
+
 ## Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        USER API                            │
-│  searchJson() | initEngine() | searchJsonPaged() | validate│
+│  search() | initEngine() | searchPaged() | aggregate()     │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -75,249 +87,51 @@ type Expr =
 │  - Query parse cache (512 entries)                        │
 │  - Result cache (128 entries, adaptive threshold)          │
 │  - Field indexes (inverted)                               │
-│  - Metrics tracking                                       │
+│  - BM25 Corpus Stats (avgdl, docLengths)                  │
 └─────────────────────────────────────────────────────────────┘
                               │
          ┌────────────────────┼────────────────────┐
          ▼                    ▼                    ▼
 ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
 │   Parser        │  │   Indexes       │  │   Cache         │
-│   (750+ lines) │  │   (280+ lines) │  │   (300+ lines)  │
 │                 │  │                 │  │                 │
 │  Query Parser  │  │ FieldIndex     │  │ ResultCache    │
-│  - Full-text   │  │ InvertedIndex │  │ QueryCache     │
-│  - SQL-like    │  │ - IndexSet    │  │ EngineMetrics │
-│  - Smart Mode │  │ - Smart lookup│  │ - Adaptive     │
+│  - SQL-like    │  │ InvertedIndex │  │ QueryCache     │
+│  - BM25 Detection│  │ - IndexSet    │  │ EngineMetrics │
+│  - Multi-Sort  │  │ - Smart lookup│  │ - Adaptive     │
 └─────────────────┘  └─────────────────┘  └─────────────────┘
          │                    │                    │
          └────────────────────┼────────────────────┘
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Evaluator (Engine)                  │
-│   (720+ lines)                                        │
-│                                                    │
-│  - Expression eval (Term, StartsWith, EndsWith, Contains, Fuzzy, Numeric, Predicate) │
-│  - Full-text matching                              │
-│  - Prefix/suffix matching (wildcard shortcuts)    │
-│  - Numeric comparison > >= < <=                   │
-│  - Predicate eval (=, !=, IN, LIKE, CONTAINS)      │
-│  - Sort comparison                                │
-│  - Path resolution (dotted notation)              │
+│                                                            │
+│  - Two-Pass Scoring Pipeline                               │
+│  - Pass 1: Filtering & TF/DF Collection                   │
+│  - Pass 2: BM25 Score Calculation                         │
+│  - Multi-Column SORT (including SCORE)                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Module Design
 
-### 1. types.ts (205 lines)
+### 1. types.ts
+Core type definitions, token kinds, and result interfaces (SearchResult, PagedResult).
 
-Core type definitions and token kinds.
+### 2. lexer.ts
+Tokenizes query strings. Now supports array brackets `[]` and trailing modifiers.
 
-```typescript
-// JsonValue type
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+### 3. parser.ts
+Builds AST. Supports complex SQL-like syntax, multi-column `ORDER BY`, and automatic wildcard detection in predicates.
 
-// Token kinds for lexer/parser
-enum TokenKind {
-  Select, Where, And, Or, Not, Fuzzy, In, Like, Regex,
-  Order, By, Limit, Offset, Asc, Desc,
-  Between, Contains, Starts, Ends, Exists, Is,
-  Eq, Neq, Gt, Gte, Lt, Lte,
-  LParen, RParen, Comma, Ident, String, Number, Bool, Null
-}
+### 4. engine.ts
+The "Virtual Machine" that evaluates queries. Implements the scoring logic and exhaustive term counting for relevance.
 
-// Query AST nodes
-class Expr { ... }
-class Predicate { ... }
-class Query { ... }
-```
+### 5. indexes.ts
+Inverted indexes for O(1) equality lookups.
 
-### 2. lexer.ts (218 lines)
-
-Tokenizes query strings into tokens.
-
-**Responsibilities:**
-- Parse strings, numbers, identifiers
-- Recognize keywords (AND, OR, LIKE, etc.)
-- Track position for error reporting
-
-**Public API:**
-```typescript
-function tokenize(query: string): Token[]
-```
-
-### 3. parser.ts (870 lines)
-
-Builds AST from tokens.
-
-**Responsibilities:**
-- Parse SELECT, WHERE, ORDER BY, LIMIT, OFFSET clauses
-- Build Predicate tree with AND/OR/NOT operators
-- Wildcard pattern detection (prefix/suffix/contains)
-- Support all query operators (=, !=, >, >=, <, <=, LIKE, IN, BETWEEN, etc.)
-
-**Public API:**
-```typescript
-function parseQuery(query: string): Query
-function validateQuery(query: string): ValidationResult
-```
-
-### 4. engine.ts (485 lines)
-
-Evaluates queries against data.
-
-**Responsibilities:**
-- Evaluate expressions (field references, literals)
-- Evaluate predicates (comparison operators)
-- Handle dotted paths (meta.region)
-- Sort results
-- Limit/offset results
-
-**Key Functions:**
-```typescript
-function evalExpr(expr: Expr, row: JsonValue, ctx: EvalContext): JsonValue
-function evalPredicate(pred: Predicate, row: JsonValue, ctx: EvalContext): boolean
-function compareForSort(a: JsonValue, b: JsonValue, ord: OrderSpec): number
-```
-
-### 5. utils.ts (71 lines)
-
-Utility functions.
-
-**Key Functions:**
-```typescript
-function getPath(obj: JsonValue, path: string): JsonValue       // Get nested value
-function setPath(obj: JsonValue, path: string, val): void // Set nested value
-function cloneJson(val: JsonValue): JsonValue               // Deep clone
-function isSubset(a: JsonValue, b: JsonValue): boolean     // Object subset check
-```
-
-### 6. indexes.ts (211 lines)
-
-Field indexing for faster searches.
-
-**Responsibilities:**
-- Create inverted indexes for indexed fields
-- Quick lookup by exact value or ranges
-
-**Key Classes:**
-```typescript
-class FieldIndex {
-  build(values: JsonValue[]): void              // Build index
-  get(value: JsonValue): number[]              // Lookup by value
-  getRange(min, max): number[]                // Range query
-}
-
-class IndexSet {
-  create(field: string, data: JsonValue[]): void
-  query(field: string, value: JsonValue): number[]
-}
-```
-
-### 7. cache.ts (226 lines)
-
-Query parsing and result caching.
-
-**Key Classes:**
-```typescript
-class ResultCache {
-  get(query: string): number[] | null        // Get cached result
-  record(query: string, indices: number[]): void  // Cache result
-}
-
-class EngineMetrics {
-  record(latency: number, rowCount: number, cached: boolean): void
-  snapshot(): EngineMetricsSnapshot
-}
-```
-
-### 8. aggregates.ts (171 lines)
-
-Aggregation functions.
-
-**Supported Aggregations:**
-- SUM, AVG, MIN, MAX, COUNT, GROUP BY
-
-**Key Functions:**
-```typescript
-function aggregateItems(data: JsonValue[], spec: AggSpec): JsonValue[]
-```
-
-### 9. engine-class.ts (221 lines)
-
-Main SearchEngine class.
-
-**Public API:**
-```typescript
-class SearchEngine {
-  constructor(data: JsonValue[], options?: EngineOptions)
-  search(query: string): SearchResult
-  searchPaged(query: string): PagedResult
-  aggregate(spec: AggSpec): JsonValue[]
-  validate(query: string): ValidationResult
-  getCacheStats(): CacheStats
-  getMetrics(): EngineMetricsSnapshot
-  createIndex(field: string): void
-  dropIndex(field: string): void
-}
-
-function initEngine(data: JsonValue[], options?: EngineOptions): SearchEngine
-function searchJson(items: JsonValue[], query: string): JsonValue[]
-```
-
-### 10. index.ts (11 lines)
-
-Public exports.
-
-```typescript
-export * from "./types.js";
-export * from "./lexer.js";
-export * from "./parser.js";
-export * from "./engine.js";
-// ... all modules
-export { SearchEngine, initEngine, searchJson, searchJsonPaged, validate } from "./engine-class.js";
-export const VERSION = "1.0.0";
-```
-
-## Query Flow
-
-```
-User Query: "Prod* OR *dia"
-    │
-    ▼
-┌─────────────┐
-│  Lexer      │  Tokenize: Ident("Prod*"), Ident("*dia"), EOF
-└─────────────┘
-    │ Token[]
-    ▼
-┌─────────────┐
-│  Parser     │  detectWildcard() → StartsWith/EndsWith
-└─────────────┘
-    │ Expr { type: "Or", parts: [...] }
-    ▼
-┌─────────────┐
-│  Engine     │  evalExpr() → startsWithText()/endsWithText()
-└─────────────┘
-    │ SearchResult { data, total }
-```
-
-## Performance Features
-
-### 1. Query Caching
-- Parse once, execute many times
-- Key: query string hash
-
-### 2. Result Caching
-- Cache matching row indices
-- Adaptive hit threshold (p95 latency based)
-
-### 3. Field Indexing
-- Inverted indexes for common fields
-- Default indexed: category, country, active
-
-### 4. Metrics Tracking
-- Query latency tracking
-- Cache hit/miss ratio
-- Adaptive caching strategy
+### 6. engine-class.ts
+The high-level orchestrator. Manages the lifecycle of data, indexes, and the two-pass execution pipeline.
 
 ## Build Outputs
 
@@ -326,10 +140,9 @@ dist/
 ├── esm/index.js           # ES Modules (for bundlers)
 ├── cjs/index.js          # CommonJS (Node.js)
 ├── types/                 # TypeScript declarations
-│   └── index.d.ts
 └── iife/                 # Browser bundles
-    ├── json-search-engine.js      # 118KB
-    └── json-search-engine.min.js # 39KB
+    ├── jsonql.js         # Standard bundle
+    └── jsonql.min.js     # Production minified
 ```
 
 ## Dependencies
@@ -340,4 +153,4 @@ None - pure TypeScript implementation.
 
 - Chrome, Firefox, Safari, Edge
 - Salesforce LWC
-- Any browser with ES5+ support
+- Any environment with ES6+ support

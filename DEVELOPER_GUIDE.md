@@ -1,4 +1,4 @@
-# Developer Guide
+# JsonQL Developer Guide
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd json-search-engine
+cd JsonQL
 
 # Install dependencies
 npm install
@@ -19,202 +19,91 @@ npm install
 ## Development Commands
 
 ```bash
-# Build all formats
+# Build all formats (ESM, CJS, Types)
 npm run build
 
-# Build specific formats
-npm run build:esm      # ES Modules
-npm run build:cjs      # CommonJS  
+# Build browser bundles
 npm run build:iife     # IIFE bundle
-npm run build:min      # Minified IIFE
+npm run build:min      # Minified IIFE (jsonql.min.js)
 
-# Run tests
-npm test              # Run all tests once
-npm run test:watch    # Watch mode
+# Run Unit Tests (Vitest)
+npm test              # Run all 46+ tests
 
-# Lint code
-npm run lint
-
-# Format code
-npm run format
+# Run Release Validation Suite
+node demo/release-suite.mjs # Validates 50+ library queries against 50k records
 ```
 
 ## Project Structure
 
 ```
-json-search-engine/
-├── src/
-│   ├── types.ts         # Type definitions
-│   ├── lexer.ts        # Tokenizer
-│   ├── parser.ts       # Query parser
-│   ├── engine.ts       # Expression evaluator
-│   ├── utils.ts       # Utility functions
-│   ├── indexes.ts     # Field indexing
-│   ├── cache.ts       # Query/result caching
-│   ├── aggregates.ts  # Aggregation functions
-│   ├── engine-class.ts # Main SearchEngine class
-│   └── index.ts      # Public exports
-├── test/
-│   └── index.test.ts  # Test suite
-├── dist/              # Build output
-│   ├── esm/          # ES Modules
-│   ├── cjs/          # CommonJS
-│   └── iife/         # Browser bundles
-├── rollup.config.js   # IIFE build config
-├── tsconfig.json      # TypeScript config
+JsonQL/
+├── src/                # Core engine source
+├── test/               # Unit tests (Vitest)
+│   ├── index.test.ts   # Functional tests
+│   ├── scoring.test.ts # BM25 validation
+│   └── wildcard.test.ts# LIKE/CONTAINS tests
+├── demo/               # Professional Dashboard
+│   ├── dataset.json    # 50k sample records
+│   ├── queries.json    # Searchable query library
+│   └── release-suite.mjs # Integration test gate
+├── dist/               # Build output
 └── package.json
 ```
 
-## Adding New Operators
+## Adding New Features
 
-### 1. Define Token Kind
+### 1. Update Types
+In `src/types.ts`, update `TokenKind`, `Expr`, or `SearchResult` as needed.
 
-In `src/types.ts`, add to `TokenKind` enum:
+### 2. Update Lexer/Parser
+If adding syntax, update `lexer.ts` to recognize new characters and `parser.ts` to build the new AST nodes.
 
-```typescript
-export enum TokenKind {
-  // ... existing
-  NewOp = "NewOp",
-}
-```
+### 3. Implement in Engine
+Update `engine.ts` to handle the new AST nodes during evaluation.
 
-### 2. Add Parser Support
-
-In `src/parser.ts`:
-
-```typescript
-// In parsePredicate()
-case TokenKind.NewOp => {
-  // Parse the operator
-}
-```
-
-### 3. Add Evaluator
-
-In `src/engine.ts`:
-
-```typescript
-// In evalPredicate()
-case Op.NewOp: {
-  // Implement evaluation logic
-}
-```
-
-### 4. Add Tests
-
-In `test/index.test.ts`:
-
-```typescript
-describe("NEWOP operator", () => {
-  it("should handle new operator", () => {
-    const result = searchJson(data, 'field NEWOP "value"');
-    expect(result.length).toBe(1);
-  });
-});
-```
+### 4. Verify with Gates
+1. Add a unit test in `test/`.
+2. Add an example query to `demo/queries.json`.
+3. Run `node demo/release-suite.mjs` to ensure zero regressions.
 
 ## Query Syntax Examples
 
-### Full-Text Search
-```typescript
-searchJson(data, "enterprise")          // Contains "enterprise"
-searchJson(data, "Product 000001")     // Multi-word search
+### Full-Text Relevance (BM25)
+```sql
+"enterprise grade" ORDER BY SCORE DESC
+fiber OR switch ORDER BY SCORE DESC
 ```
 
-### Wildcard Suffix Shorthand
-```typescript
-searchJson(data, "Prod*")               // Starts with "Prod" (LIKE "Prod%")
-searchJson(data, "*dia")              // Ends with "dia" (LIKE "%dia")
-searchJson(data, "*do*")              // Contains "do" (LIKE "%do%")
+### Advanced Filtering
+```sql
+country = "India" AND salary > 2000000
+category IN ("software", "iot")
+tags CONTAINS "fiber"
+notes IS NOT NULL
 ```
 
-### Boolean Combinations
-```typescript
-searchJson(data, "enterprise AND cloud")     // Both terms
-searchJson(data, "enterprise OR cloud")     // Either term
-searchJson(data, "enterprise AND *work")   // Term + wildcard
-searchJson(data, "*ia OR *do")              // Wildcard combination
+### Array & Null Checks
+```sql
+tags = []               -- Find empty arrays
+meta.region EXISTS      -- Check field presence
+notes IS NULL           -- Match null values
 ```
 
-### SQL-Like Predicates
-```typescript
-searchJson(data, 'name = "USA"')
-searchJson(data, "age > 25")
-searchJson(data, 'name LIKE "%test%"')
-searchJson(data, 'name CONTAINS "test"')
-searchJson(data, "age > 18 AND age < 65")
+### Projections & Sorting
+```sql
+SELECT name, country, SCORE ORDER BY country ASC, SCORE DESC
+SELECT * LIMIT 10 OFFSET 20
 ```
 
-### Sorting & Limits
-```typescript
-searchJson(data, "enterprise ORDER BY name")
-searchJson(data, "enterprise ORDER BY age DESC")
-searchJson(data, "enterprise LIMIT 10")
-searchJson(data, "enterprise LIMIT 10 OFFSET 20")
-```
+## Building for Salesforce (LWC)
 
-```bash
-# Run tests matching pattern
-npm test -- --grep "aggregation"
-
-# Run in watch mode
-npm run test:watch
-```
-
-## Building for Production
-
-```bash
-# Full build with all formats
-npm run build
-
-# Just IIFE for Salesforce
-npm run build:iife
-npm run build:min
-```
+The IIFE bundle is designed specifically for LWC static resources.
+1. Run `npm run build:min`.
+2. Upload `dist/iife/jsonql.min.js` to Salesforce.
+3. Import via `loadScript`.
 
 ## Code Style
 
-- Use TypeScript strict mode
-- Run `npm run format` before committing
-- Follow existing patterns in source files
-
-## Adding Dependencies
-
-```bash
-# Production dependency
-npm install <package>
-
-# Dev dependency
-npm install <package> --save-dev
-```
-
-## Troubleshooting
-
-### Build Errors
-
-```bash
-# Clean build artifacts
-rm -rf dist
-
-# Rebuild
-npm run build
-```
-
-### Test Failures
-
-```bash
-# Run single test file
-npm test -- test/index.test.ts
-
-# Run with verbose output
-npm test -- --reporter=verbose
-```
-
-## Release Process
-
-1. Update version in `package.json`
-2. Run `npm run build`
-3. Run `npm test`
-4. Commit changes
-5. Tag release: `git tag v1.x.x`
-6. Push: `git push --tags`
+- Use TypeScript strict mode.
+- Run `npm run format` before committing.
+- Ensure all logic is zero-dependency.
